@@ -6,7 +6,7 @@
 and handing the review back to the agent as Markdown.
 It's built on [counterweight](https://github.com/JoshKarpel/counterweight) (React-like TUI framework),
 which this project tracks at `main` through a uv git dependency.
-`PLAN.md` holds the goals, the design decisions and their reasoning, and the steps.
+`README.md` describes what it does for the person using it.
 
 When counterweight lacks something assess-diff needs, the fix belongs upstream in counterweight,
 not as a workaround here.
@@ -19,6 +19,8 @@ The counterweight checkout at `~/projects/counterweight` has its docs in `docs/`
   take values and return values;
   the shell (git subprocesses, the file watcher, review storage, the CLI) does the I/O and feeds them.
 - Components live in `src/assess_diff/ui/`. They hold UI state; anything worth a unit test goes in a pure function beside them.
+- The reasoning behind a design lives in the docstring of the module, class, or function it shapes,
+  not in a separate design doc.
 
 ## Development
 
@@ -35,6 +37,9 @@ just pre-commit
 
 A performance claim needs `just bench` numbers from before and after the change, from the same machine.
 The benchmarks in `benchmarks/` sit outside the coverage gate, and reuse the tests' harness.
+
+A pre-commit hook records the demo again whenever `src/assess_diff/`, `demo/`, or `uv.lock` changes,
+so a change to the app usually changes `demo/demo.cast` (and `demo/demo.gif`) too, and they're committed with it.
 
 Line and branch coverage of `src/assess_diff` and `tests` is held at 100% (`fail_under` in `pyproject.toml`),
 so new code comes with the tests that run it, UI code included (driven headless through counterweight's autopilot).

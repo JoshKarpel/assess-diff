@@ -2,6 +2,11 @@
 Reviews on disk: one JSON file per review in a directory, written atomically.
 
 This is the only module that reads or writes review files.
+
+Files rather than SQLite, since nothing here needs relational queries or transactions across reviews:
+a review is only ever written by the one process that has it open, two processes in two worktrees never touch
+the same file, and grouping by project is a pass over a directory of small files.
+What that gives up is two processes opening the _same_ review, which `ReviewStore.save` guards against.
 """
 
 from __future__ import annotations
@@ -48,6 +53,10 @@ def parsed(path: Path, content: bytes) -> Review:
 
 
 def digest(content: bytes) -> str:
+    """
+    What a save compares to tell whether another process wrote the file:
+    not its modification time, which two writes within one clock tick share.
+    """
     return hashlib.sha256(content).hexdigest()
 
 

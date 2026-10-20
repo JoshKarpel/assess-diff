@@ -36,6 +36,8 @@ class Repository:
     A worktree, and the repository it belongs to.
     `common_dir` is the git directory every worktree of the repository shares, which is what makes reviews
     from several worktrees one project.
+    Moving or re-cloning the repository changes it, and leaves the old reviews under the old path.
+    A root commit's hash would survive a move, but would also make one project of unrelated clones and forks.
     """
 
     worktree: Path

@@ -4,6 +4,9 @@ The diff view as a sequence of positions the cursor can be on, and how the curso
 A `Document` lays out the summary, each file's header, its rows (in the unified or split view),
 and each comment after the row it ends on, in display order.
 The cursor is a position value rather than an index, so it survives the diff reloading under it.
+
+One cursor over every position, rather than counterweight focus on each hunk,
+since reaching a line between hunks would then need a second cursor handed off across components.
 """
 
 from __future__ import annotations
