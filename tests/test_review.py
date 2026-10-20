@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from datetime import UTC
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -93,7 +92,7 @@ def test_review_start_is_empty_and_numbers_from_one() -> None:
     started = review()
 
     assert (started.version, started.summary, started.comments, started.next_number, started.base_mode) == (
-        3,
+        1,
         "",
         (),
         1,
@@ -170,16 +169,16 @@ def test_old_side_comment_is_outdated_against_another_base() -> None:
     assert (is_outdated(current, diff_of(FILE)), is_outdated(moved, diff_of(FILE))) == (False, True)
 
 
-V1 = (Path(__file__).parent / "fixtures" / "review-v1.json").read_bytes()
-V2 = (Path(__file__).parent / "fixtures" / "review-v2.json").read_bytes()
+def test_parse_review_migrates_an_older_review_through_each_version_in_turn() -> None:
+    current = review(summary="written, then -1 to 0, then 0 to 1")
+    document = json.loads(current.model_dump_json())
+    oldest = {**document, "version": -1, "summary": "written"}
+    migrations = {
+        -1: lambda older: {**older, "version": 0, "summary": f"{older['summary']}, then -1 to 0"},
+        0: lambda older: {**older, "version": 1, "summary": f"{older['summary']}, then 0 to 1"},
+    }
 
-
-def test_parse_review_migrates_a_version_1_review_by_naming_it_for_its_start() -> None:
-    migrated = parse_review(V1)
-
-    original = json.loads(V1)
-    assert (migrated.version, migrated.name) == (3, default_name(datetime.fromisoformat(original["created"])))
-    assert [comment.body for comment in migrated.comments] == [comment["body"] for comment in original["comments"]]
+    assert parse_review(json.dumps(oldest).encode(), migrations) == current
 
 
 def test_parse_review_reads_the_current_version_as_is() -> None:
@@ -206,13 +205,13 @@ def test_parse_review_refuses_an_anchor_whose_base_commit_does_not_match_its_sid
 @pytest.mark.parametrize(
     ("content", "message"),
     [
-        (b'{"version": 4}', r"^This review is version 4, and this assess-diff reads up to version 3$"),
-        (b'{"id": "x"}', r"^This review is version None, and this assess-diff reads up to version 3$"),
-        (b'{"version": "1"}', r"^This review is version '1', and this assess-diff reads up to version 3$"),
-        (b'{"version": 1.0}', r"^This review is version 1\.0, and this assess-diff reads up to version 3$"),
-        (b'{"version": [1]}', r"^This review is version \[1\], and this assess-diff reads up to version 3$"),
+        (b'{"version": 2}', r"^This review is version 2, and this assess-diff reads up to version 1$"),
+        (b'{"version": 0}', r"^This review is version 0, and this assess-diff reads up to version 1$"),
+        (b'{"id": "x"}', r"^This review is version None, and this assess-diff reads up to version 1$"),
+        (b'{"version": "1"}', r"^This review is version '1', and this assess-diff reads up to version 1$"),
+        (b'{"version": 1.5}', r"^This review is version 1\.5, and this assess-diff reads up to version 1$"),
+        (b'{"version": [1]}', r"^This review is version \[1\], and this assess-diff reads up to version 1$"),
         (b"[1, 2]", r"^A review file holds a JSON object$"),
-        (b'{"version": 1, "created": 5}', r"^A review's start time is 5, not a timestamp$"),
     ],
 )
 def test_parse_review_refuses_what_it_cant_read(content: bytes, message: str) -> None:
@@ -224,13 +223,6 @@ def test_default_name_is_the_local_minute_it_started() -> None:
     started = datetime(2026, 2, 3, 4, 5, 6, tzinfo=UTC)
 
     assert default_name(started) == started.astimezone().strftime("%Y-%m-%d %H:%M")
-
-
-def test_parse_review_migrates_a_version_2_review_changing_only_its_version() -> None:
-    migrated = parse_review(V2)
-
-    original = json.loads(V2)
-    assert json.loads(migrated.model_dump_json()) == {**original, "version": 3}
 
 
 def test_parse_review_reads_a_comment_on_a_whole_file() -> None:

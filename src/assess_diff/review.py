@@ -94,7 +94,7 @@ class Comment(BaseModel):
 class Review(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    version: Literal[3]
+    version: Literal[1]
     id: str
     name: str
     """What the reader calls the review; the time it started, until they rename it."""
@@ -139,34 +139,21 @@ class Review(BaseModel):
         return next((comment for comment in self.comments if comment.number == number), None)
 
 
-CURRENT_VERSION = 3
+CURRENT_VERSION = 1
 
 
 class UnreadableReview(Exception):
     """A review file that can't be read: it isn't a review, or a newer version of assess-diff wrote it."""
 
 
-def named_from_start(document: Mapping[str, object]) -> dict[str, object]:
-    """Version 1 to 2: reviews gained a name, which for a review that had none is when it started."""
-    created = document["created"]
-    if not isinstance(created, str):
-        raise UnreadableReview(f"A review's start time is {created!r}, not a timestamp")
-    return {**document, "version": 2, "name": default_name(datetime.fromisoformat(created))}
-
-
-def with_file_comments(document: Mapping[str, object]) -> dict[str, object]:
-    """
-    Version 2 to 3: comments can be on a whole file, which a version 2 review has none of.
-    The bump is so assess-diff from before refuses a review with them as newer, rather than as malformed.
-    """
-    return {**document, "version": 3}
-
+type Migration = Callable[[Mapping[str, object]], dict[str, object]]
+"""A review file's document at one version, rewritten as the next version would have written it."""
 
 # Each version's migration to the next, by the version it migrates from.
-MIGRATIONS = {1: named_from_start, 2: with_file_comments}
+MIGRATIONS: Mapping[int, Migration] = {}
 
 
-def parse_review(content: bytes) -> Review:
+def parse_review(content: bytes, migrations: Mapping[int, Migration] = MIGRATIONS) -> Review:
     """
     A review from a file's content, migrated to the current version if an older one wrote it.
 
@@ -178,7 +165,7 @@ def parse_review(content: bytes) -> Review:
     if not isinstance(document, dict):
         raise UnreadableReview("A review file holds a JSON object")
     while (version := document.get("version")) != CURRENT_VERSION:
-        migrate = MIGRATIONS.get(version) if isinstance(version, int) else None
+        migrate = migrations.get(version) if isinstance(version, int) else None
         if migrate is None:
             raise UnreadableReview(
                 f"This review is version {version!r}, and this assess-diff reads up to version {CURRENT_VERSION}"

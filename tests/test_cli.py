@@ -258,7 +258,7 @@ def test_main_reports_an_unreadable_review(
     assert (exited.value.code, capsys.readouterr().err) == (
         1,
         f"assess-diff: Can't read the review in {project.directory / 'future.json'}: "
-        "This review is version 99, and this assess-diff reads up to version 3\n",
+        "This review is version 99, and this assess-diff reads up to version 1\n",
     )
 
 

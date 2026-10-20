@@ -22,7 +22,6 @@ from assess_diff.storage import for_project
 from assess_diff.storage import reviews_directory
 from tests.builders import STARTED
 from tests.builders import review
-from tests.test_review import V1
 
 
 @pytest.fixture
@@ -213,19 +212,10 @@ def test_update_over_another_process_saves_as_a_new_review(store: ReviewStore) -
     assert open_review.review.id == "forked-id"
 
 
-def test_reviews_migrate_a_file_an_older_version_wrote(store: ReviewStore) -> None:
-    store.directory.mkdir(parents=True)
-    (store.directory / "old.json").write_bytes(V1)
-
-    (found,) = store.reviews()
-
-    assert (found.version, found.id) == (3, "01a1569b119070abbe179a8da6ebf006")
-
-
 def test_an_unreadable_review_names_its_file(store: ReviewStore) -> None:
     store.directory.mkdir(parents=True)
     broken = store.directory / "broken.json"
-    broken.write_text('{"version": 2, "id": "broken"}')
+    broken.write_text('{"version": 1, "id": "broken"}')
 
     with pytest.raises(UnreadableReview, match=rf"^Can't read the review in {broken}: "):
         store.load("broken")

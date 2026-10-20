@@ -27,8 +27,6 @@ How to use mutmut, write killing tests, and argue equivalence is in the global
   ```
 
 - The round is done when every survivor matches an entry in the catalogue below.
-  Two `review.named_from_start` mutants time out: they stop its loop advancing,
-  and mutmut counts a timeout as caught.
 
 ## Memory
 
