@@ -48,8 +48,13 @@ def click(x: int, y: int, *, shift: bool = False) -> list[MouseDown | MouseUp]:
     return [MouseDown(absolute=position, button=1, is_shift_held=shift), MouseUp(absolute=position, button=1)]
 
 
+def screen_text(frame: Frame) -> str:
+    """A screen's text as it reads: no-break spaces, which keep words together in the header and footer, as spaces."""
+    return frame.text(ansi=False).replace("\N{NO-BREAK SPACE}", " ")
+
+
 def showing(text: str) -> WaitFor:
-    return WaitFor(lambda frame: text in frame.text(ansi=False), timeout=timedelta(seconds=10))
+    return WaitFor(lambda frame: text in screen_text(frame), timeout=timedelta(seconds=10))
 
 
 def where(frame: str, text: str) -> Position:
@@ -70,7 +75,7 @@ class Harness:
 
     def shot(self) -> Screenshot:
         def keep(frame: Frame) -> None:
-            self.frames.append(frame.text(ansi=False))
+            self.frames.append(screen_text(frame))
             self.colored.append(frame.text(ansi=True))
 
         return Screenshot(handler=keep)

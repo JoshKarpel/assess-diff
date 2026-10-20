@@ -45,6 +45,8 @@ from assess_diff.navigation import Position
 from assess_diff.navigation import RowAt
 from assess_diff.navigation import SummaryAt
 from assess_diff.review import Comment
+from assess_diff.ui.pills import ON_DIALOG
+from assess_diff.ui.pills import key_pills
 from assess_diff.ui.rows import Highlight
 from assess_diff.ui.rows import digits_for
 from assess_diff.ui.rows import row_chunks
@@ -371,7 +373,10 @@ def summary_dialog(summary: str, handle: FocusHandle, actions: Actions) -> Div:
                 styles=SUMMARY_STYLES,
                 style=min_height(3) | max_height(16),
             ),
-            Text(content=" esc done  (saved as you type)", style=text_wrap_none | text_color("slate", 400)),
+            Text(
+                content=key_pills(("esc done",), ON_DIALOG),
+                style=text_wrap_stable | pad_x(1) | text_bg("slate", 900),
+            ),
         ),
     )
 

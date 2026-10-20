@@ -1,0 +1,89 @@
+{
+  "version": 2,
+  "id": "01a1569b119070abbe179a8da6ebf006",
+  "name": "2026-10-19 23:59",
+  "project": "/home/exedev/projects/assess/.git",
+  "worktree": "/home/exedev/projects/assess.worktrees/spike",
+  "branch": "spike",
+  "base_mode": "merge-base",
+  "created": "2026-10-19T23:59:25.584514Z",
+  "updated": "2026-10-20T00:08:38.470477Z",
+  "summary": "",
+  "comments": [
+    {
+      "number": 1,
+      "anchor": {
+        "path": "src/assess_diff/ui/rows.py",
+        "side": "new",
+        "start": 175,
+        "end": 175,
+        "base_commit": null
+      },
+      "excerpt": [
+        {
+          "kind": "added",
+          "text": "            left_syntax = None if left is None else syntax.get(left)"
+        }
+      ],
+      "body": "",
+      "created": "2026-10-20T00:00:39.550262Z"
+    },
+    {
+      "number": 2,
+      "anchor": {
+        "path": "src/assess_diff/ui/syntax.py",
+        "side": "new",
+        "start": 3,
+        "end": 3,
+        "base_commit": null
+      },
+      "excerpt": [
+        {
+          "kind": "added",
+          "text": ""
+        }
+      ],
+      "body": "\n\n",
+      "created": "2026-10-20T00:00:52.326370Z"
+    },
+    {
+      "number": 3,
+      "anchor": {
+        "path": "pyproject.toml",
+        "side": "new",
+        "start": 1,
+        "end": 6,
+        "base_commit": null
+      },
+      "excerpt": [
+        {
+          "kind": "added",
+          "text": "[build-system]"
+        },
+        {
+          "kind": "added",
+          "text": "requires = [\"uv_build>=0.12.23\"]"
+        },
+        {
+          "kind": "added",
+          "text": "build-backend = \"uv_build\""
+        },
+        {
+          "kind": "added",
+          "text": ""
+        },
+        {
+          "kind": "added",
+          "text": "[project]"
+        },
+        {
+          "kind": "added",
+          "text": "name = \"assess-diff\""
+        }
+      ],
+      "body": "foo bar",
+      "created": "2026-10-20T00:04:41.069756Z"
+    }
+  ],
+  "next_number": 5
+}

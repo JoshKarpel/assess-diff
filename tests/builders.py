@@ -16,6 +16,7 @@ from assess_diff.diff import LineKind
 from assess_diff.diff import Side
 from assess_diff.review import Comment
 from assess_diff.review import ExcerptLine
+from assess_diff.review import FileAnchor
 from assess_diff.review import NewAnchor
 from assess_diff.review import OldAnchor
 from assess_diff.review import Review
@@ -73,3 +74,7 @@ def comment(
         body=body,
         created=STARTED,
     )
+
+
+def file_comment(number: int, path: str, body: str = "") -> Comment:
+    return Comment(number=number, anchor=FileAnchor(path=path, side=None), excerpt=(), body=body, created=STARTED)

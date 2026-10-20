@@ -32,6 +32,8 @@ from counterweight.keys import Key
 from counterweight.styles.utilities import *
 
 from assess_diff.review import Review
+from assess_diff.ui.pills import ON_DIALOG
+from assess_diff.ui.pills import key_pills
 
 SHOWN_ROWS = 14
 
@@ -180,9 +182,9 @@ def review_manager(
         return tuple(rows)
 
     footer = (
-        f" press d again to delete “{chosen.name}”"
+        (f"press d again to delete “{chosen.name}”",)
         if chosen is not None and choice.confirming_delete == chosen.id
-        else " enter open  e rename  dd delete  esc close   ● open  ↪ another worktree"
+        else ("enter open", "e rename", "dd delete", "esc close", "● open", "↪ another worktree")
     )
     return Div(
         style=dialog_box
@@ -200,6 +202,6 @@ def review_manager(
                 on_input=scroll_on_wheel(1),
                 children=tuple(row for index, review in enumerate((None, *reviews)) for row in entry(index, review)),
             ),
-            Text(content=footer, style=text_wrap_none | text_color("slate", 400)),
+            Text(content=key_pills(footer, ON_DIALOG), style=text_wrap_stable | pad_x(1) | text_bg("slate", 900)),
         ),
     )

@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace
 from pathlib import Path
+from typing import assert_never
 
 from counterweight.components import component
 from counterweight.controls import CopyToClipboard
@@ -69,6 +70,7 @@ from assess_diff.navigation import selection_span
 from assess_diff.preferences import Preferences
 from assess_diff.preferences import PreferencesFile
 from assess_diff.preferences import themes
+from assess_diff.review import FileAnchor
 from assess_diff.review import Review
 from assess_diff.review import add_comment
 from assess_diff.review import anchor_for
@@ -84,6 +86,9 @@ from assess_diff.ui.diff_view import diff_pane
 from assess_diff.ui.diff_view import summary_dialog
 from assess_diff.ui.diff_view import use_stable_actions
 from assess_diff.ui.file_picker import file_picker
+from assess_diff.ui.pills import ON_SCREEN
+from assess_diff.ui.pills import key_pills
+from assess_diff.ui.pills import pills
 from assess_diff.ui.review_manager import ManagerActions
 from assess_diff.ui.review_manager import review_manager
 from assess_diff.ui.theme_picker import Query
@@ -201,8 +206,8 @@ def name_field(
     )
 
 
-def status_line(review: Review, diff: Diff | None, mode: ViewMode) -> tuple[Chunk, ...]:
-    """Everything the status line says after the review's name."""
+def status_line(review: Review, diff: Diff | None, mode: ViewMode) -> tuple[tuple[Chunk, ...], ...]:
+    """Everything the status line says after the review's name, in the groups it wraps between."""
     branch = review.branch or "detached HEAD"
     comments = len(review.comments)
     if diff is None:
@@ -211,26 +216,62 @@ def status_line(review: Review, diff: Diff | None, mode: ViewMode) -> tuple[Chun
         against = f"against HEAD {diff.base.short}"
     else:
         against = f"against {diff.base.label} (merge base {diff.base.short})"
-    files = "" if diff is None else plural(len(diff.files), "file")
+    files = (
+        ()
+        if diff is None
+        else (
+            (
+                Chunk(content=plural(len(diff.files), "file"), style=text_color("slate", 400)),
+                Chunk(content=f" +{sum(file.additions for file in diff.files)}", style=text_color("green", 400)),
+                Chunk(content=f" -{sum(file.deletions for file in diff.files)}", style=text_color("red", 400)),
+            ),
+        )
+    )
     return (
-        Chunk(content=f" {branch} ", style=text_bold),
-        Chunk(content=against, style=text_color("slate", 300)),
-        Chunk(content=f"  {files}  {plural(comments, 'comment')}  {mode}", style=text_color("slate", 400)),
+        (Chunk(content=branch, style=text_bold),),
+        (Chunk(content=against, style=text_color("slate", 300)),),
+        *files,
+        (Chunk(content=plural(comments, "comment"), style=text_color("slate", 400)),),
+        (Chunk(content=str(mode), style=text_color("slate", 400)),),
     )
 
 
-def key_hints(session: Session) -> str:
+def key_hints(session: Session, are_keys_shown: bool) -> tuple[str, ...]:
+    """
+    The keys of what has focus, each with what it does; the diff's are folded away unless `are_keys_shown`,
+    but a dialog's or a confirmation's always show.
+    """
     if session.naming is not None:
-        return " enter rename  esc keep the old name"
+        return ("enter rename", "esc keep the old name")
     if session.managing is not None:
-        return " ↑↓ choose  enter open  e rename  dd delete  esc close"
+        return ("↑↓ choose", "enter open", "e rename", "dd delete", "esc close")
     if session.picking_theme is not None:
-        return " type to filter  ↑↓ preview  enter keep  esc revert"
+        return ("type to filter", "↑↓ preview", "enter keep", "esc revert")
     if session.editing is not None:
-        return " esc done  (everything you type is saved as you type it)"
+        return ("esc done",)
     if session.confirming_delete is not None:
-        return f" press d again to delete #{session.confirming_delete}, anything else to keep it"
-    return " ↑↓ move  ⇧↑↓ select  tab hunk/comment  n/N comment  enter comment  dd delete  r summary  e rename  s split  b base  t theme  f files  o reviews  c copy  q quit"
+        return (f"press d again to delete #{session.confirming_delete}", "anything else to keep it")
+    if not are_keys_shown:
+        return ()
+    return (
+        "↑↓ move",
+        "⇧↑↓ select",
+        "tab hunk/comment",
+        "n/N comment",
+        "enter comment",
+        "dd delete",
+        "r summary",
+        "e rename",
+        "s split",
+        "b base",
+        "t theme",
+        "f files",
+        "F fold files",
+        "o reviews",
+        "c copy",
+        "⇧? fold keys",
+        "q quit",
+    )
 
 
 @component
@@ -252,6 +293,9 @@ def assess_app(
     base_mode, set_base_mode = use_state(review.base_mode if target is not None else BaseMode.HEAD)
     diff, set_diff = use_state(no_diff)
     session, set_session = use_state(INITIAL_SESSION)
+    # Apart from the session, so they stay as they are when another review opens.
+    are_files_shown, set_files_shown = use_state(True)
+    are_keys_shown, set_keys_shown = use_state(True)
     notice, set_notice = use_state(no_notice)
     # Apart from `notice`, so the refresh that recovers from a git failure can clear it without clearing any other.
     git_error, set_git_error = use_state(no_notice)
@@ -371,6 +415,11 @@ def assess_app(
         update_review(lambda r: add_comment(r, anchor, excerpt, open_review.now()))
         return start_editing(number)
 
+    def comment_on_file(path: str) -> InputResponse:
+        number = open_review.review.next_number
+        update_review(lambda r: add_comment(r, FileAnchor(path=path, side=None), (), open_review.now()))
+        return start_editing(number)
+
     def go(position: Position, block: ScrollAlignment = "nearest") -> ScrollIntoView:
         set_session(lambda s: replace(s, cursor=position, selection=None, confirming_delete=None))
         return ScrollIntoView(cursor_element, block=block)
@@ -422,8 +471,10 @@ def assess_app(
                         return start_editing(number)
                     case RowAt():
                         return comment_on_selection(document, cursor)
-                    case _:
-                        return ()
+                    case HeaderAt(path=path):
+                        return comment_on_file(path)
+                    case _ as unreachable:
+                        assert_never(unreachable)
             case KeyPressed(key="r"):
                 return start_editing(None)
             case KeyPressed(key="d") if isinstance(cursor, CommentAt):
@@ -576,7 +627,15 @@ def assess_app(
             case KeyPressed(key="e"):
                 return start_naming()
             case KeyPressed(key="f"):
+                set_files_shown(True)
                 return FocusOn(picker_focus)
+            case KeyPressed(key="F"):
+                set_files_shown(not are_files_shown)
+                # Folding the files away unmounts the picker, which may have focus.
+                return FocusOn(diff_focus) if are_files_shown else ()
+            case KeyPressed(key="?"):
+                set_keys_shown(not are_keys_shown)
+                return ()
             case KeyPressed(key="c"):
                 copy_notice, copy = copied(review, document)
                 set_notice(copy_notice)
@@ -591,29 +650,35 @@ def assess_app(
     comment_counts = tuple(
         sum(comment.anchor.path == file.path for comment in review.comments) for file in picker_files
     )
+    hints = key_hints(session, are_keys_shown)
 
     return Div(
         style=col,
         on_input=on_global_key,
         children=(
             Div(
-                style=row | text_bg("slate", 900),
+                style=row | flex_wrap | gap_width(1),
                 children=(
                     Text(content=" assess-diff ", style=text_bold | text_wrap_none | text_bg("indigo", 700)),
                     name_field(session.naming, set_name, finish_naming, cancel_naming)
                     if session.naming is not None
                     else Text(
                         content=f" {review.name} ",
-                        style=NAME_STYLE | text_wrap_none,
+                        style=NAME_STYLE | text_wrap_none | ON_SCREEN,
                         on_input=on_click(start_naming),
                     ),
-                    Text(content=status_line(review, diff, mode), style=text_wrap_none | fill(1)),
+                    # Its own row, under the name, when it doesn't fit beside it, wrapping between pills there.
+                    Text(content=pills(status_line(review, diff, mode)), style=text_wrap_stable | grow(1)),
                 ),
             ),
             Div(
                 style=row | fill(1),
                 children=(
-                    file_picker(picker_files, comment_counts, current_path, picker_focus, jump),
+                    *(
+                        (file_picker(picker_files, comment_counts, current_path, picker_focus, jump),)
+                        if are_files_shown
+                        else ()
+                    ),
                     diff_pane(
                         document,
                         review.summary,
@@ -631,11 +696,27 @@ def assess_app(
                 ),
             ),
             *(
-                Text(content=f" {line}", style=text_wrap_none | text_bg("slate", 900) | text_color("amber", 300))
+                Text(
+                    content=line,
+                    style=text_wrap_stable
+                    | text_justify_center
+                    | pad_x(1)
+                    | text_bg("slate", 900)
+                    | text_color("amber", 300),
+                )
                 for line in (git_error, notice)
                 if line
             ),
-            Text(content=key_hints(session), style=text_wrap_none | text_bg("slate", 900) | text_color("slate", 400)),
+            *(
+                (
+                    Text(
+                        content=key_pills(hints),
+                        style=text_wrap_stable,
+                    ),
+                )
+                if hints
+                else ()
+            ),
             *(
                 (theme_picker(themes(), picking.query, set_query, picking.handle, choose_theme, cancel_theme),)
                 if picking is not None

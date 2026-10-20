@@ -1,6 +1,7 @@
 """
 A review as Markdown, for pasting into an agent's input: the summary, then each comment in creation order,
-each with a line reference and the lines it was made on.
+each with a line reference the agent can read the lines at, and, where those lines have changed since,
+the lines as they were, which the working tree no longer has.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from assess_diff.diff import LineKind
 from assess_diff.review import Anchor
 from assess_diff.review import Comment
 from assess_diff.review import ExcerptLine
+from assess_diff.review import FileAnchor
 from assess_diff.review import NewAnchor
 from assess_diff.review import OldAnchor
 from assess_diff.review import Review
@@ -46,24 +48,33 @@ def heading(review: Review, diff: Diff) -> str:
 def location(anchor: Anchor) -> str:
     """
     Where a comment points, as an agent reads a file reference:
-    `path:line` or `path:start-end` for the working tree's lines, and a note naming the base for removed ones.
+    `path:line` or `path:start-end` for the working tree's lines, a note naming the base for removed ones,
+    and the bare `path` for a whole file.
     """
-    lines = str(anchor.start) if anchor.start == anchor.end else f"{anchor.start}-{anchor.end}"
     match anchor:
-        case NewAnchor():
-            return f"`{anchor.path}:{lines}`"
-        case OldAnchor():
-            line_word = "line" if anchor.start == anchor.end else "lines"
-            return f"`{anchor.path}`, removed {line_word} {lines} (in `{anchor.base_commit[:7]}`)"
+        case NewAnchor(start=start, end=end):
+            return f"`{anchor.path}:{line_range(start, end)}`"
+        case OldAnchor(start=start, end=end):
+            line_word = "line" if start == end else "lines"
+            return f"`{anchor.path}`, removed {line_word} {line_range(start, end)} (in `{anchor.base_commit[:7]}`)"
+        case FileAnchor():
+            return f"`{anchor.path}`"
         case _ as unreachable:
             assert_never(unreachable)
 
 
+def line_range(start: int, end: int) -> str:
+    return str(start) if start == end else f"{start}-{end}"
+
+
 def comment_section(comment: Comment, outdated: bool) -> str:
     parts = [f"## {comment.number}. {location(comment.anchor)}"]
-    if outdated:
+    if outdated and isinstance(comment.anchor, FileAnchor):
+        parts.append("_This file has left the diff since this comment was written._")
+    elif outdated:
         parts.append("_These lines have changed since this comment was written; the excerpt shows them as they were._")
-    parts.extend((excerpt_block(comment.excerpt), comment.body.strip()))
+        parts.append(excerpt_block(comment.excerpt))
+    parts.append(comment.body.strip())
     return "\n\n".join(part for part in parts if part)
 
 

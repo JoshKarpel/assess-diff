@@ -26,6 +26,7 @@ from assess_diff.storage import ReviewStore
 from assess_diff.ui.app import assess_app
 from tests.conftest import Scratch
 from tests.conftest import Terminal
+from tests.harness import screen_text
 
 CLOCK = datetime(2026, 7, 7, 7, 7, tzinfo=UTC)
 
@@ -48,7 +49,7 @@ async def test_c_copies_the_review_as_markdown(scratch: Scratch, terminal: Termi
         input_stream=terminal.stream,
         dimensions=(80, 20),
         autopilot=[
-            WaitFor(lambda frame: "against HEAD" in frame.text(ansi=False), timeout=timedelta(seconds=10)),
+            WaitFor(lambda frame: "against HEAD" in screen_text(frame), timeout=timedelta(seconds=10)),
             KeyPressed(key="c"),
             Quit(),
         ],

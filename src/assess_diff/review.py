@@ -58,7 +58,17 @@ class OldAnchor(BaseModel):
     base_commit: str
 
 
-Anchor = Annotated[NewAnchor | OldAnchor, Field(discriminator="side")]
+class FileAnchor(BaseModel):
+    """Where a comment on a whole file points: the file, on no side and at no lines."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    side: None
+
+
+type LineAnchor = NewAnchor | OldAnchor
+Anchor = Annotated[NewAnchor | OldAnchor | FileAnchor, Field(discriminator="side")]
 
 
 class ExcerptLine(BaseModel):
@@ -84,7 +94,7 @@ class Comment(BaseModel):
 class Review(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    version: Literal[2]
+    version: Literal[3]
     id: str
     name: str
     """What the reader calls the review; the time it started, until they rename it."""
@@ -129,7 +139,7 @@ class Review(BaseModel):
         return next((comment for comment in self.comments if comment.number == number), None)
 
 
-CURRENT_VERSION = 2
+CURRENT_VERSION = 3
 
 
 class UnreadableReview(Exception):
@@ -144,8 +154,16 @@ def named_from_start(document: Mapping[str, object]) -> dict[str, object]:
     return {**document, "version": 2, "name": default_name(datetime.fromisoformat(created))}
 
 
+def with_file_comments(document: Mapping[str, object]) -> dict[str, object]:
+    """
+    Version 2 to 3: comments can be on a whole file, which a version 2 review has none of.
+    The bump is so assess-diff from before refuses a review with them as newer, rather than as malformed.
+    """
+    return {**document, "version": 3}
+
+
 # Each version's migration to the next, by the version it migrates from.
-MIGRATIONS = {1: named_from_start}
+MIGRATIONS = {1: named_from_start, 2: with_file_comments}
 
 
 def parse_review(content: bytes) -> Review:
@@ -222,21 +240,24 @@ def anchor_for(
     return anchor, excerpt
 
 
-def anchored_lines(file: FileDiff, anchor: Anchor) -> tuple[Line, ...]:
+def anchored_lines(file: FileDiff, anchor: LineAnchor) -> tuple[Line, ...]:
     """The lines of `file` on the anchor's side within its range, as they are now."""
     return tuple(line for line in file.lines if line.side is anchor.side and anchor.start <= line.number <= anchor.end)
 
 
 def is_outdated(comment: Comment, diff: Diff) -> bool:
     """
-    Whether the lines a comment was made on have changed since, so its line numbers can't be trusted:
-    its file left the diff, its old-side lines count in another base, or the text at its range differs.
+    Whether what a comment was made on has changed since, so where it points can't be trusted:
+    its file left the diff, or for a comment on lines, its old-side lines count in another base,
+    or the text at its range differs.
     """
     anchor = comment.anchor
-    if isinstance(anchor, OldAnchor) and anchor.base_commit != diff.base.commit:
-        return True
     file = next((file for file in diff.files if file.path == anchor.path), None)
     if file is None:
+        return True
+    if isinstance(anchor, FileAnchor):
+        return False
+    if isinstance(anchor, OldAnchor) and anchor.base_commit != diff.base.commit:
         return True
     kinds = {LineKind.REMOVED} if anchor.side is Side.OLD else {LineKind.ADDED, LineKind.CONTEXT}
     then = [line.text for line in comment.excerpt if line.kind in kinds]

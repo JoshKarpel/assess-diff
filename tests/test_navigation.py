@@ -32,6 +32,7 @@ from tests.builders import added
 from tests.builders import comment
 from tests.builders import context
 from tests.builders import diff_of
+from tests.builders import file_comment
 from tests.builders import modified
 from tests.builders import removed
 
@@ -83,6 +84,13 @@ def test_comments_on_a_file_without_rows_go_under_its_header() -> None:
 
     assert document.positions == (SummaryAt(), HeaderAt("empty.bin"), CommentAt(3))
     assert [document.positions[stop] for stop in document.stops] == [SummaryAt(), CommentAt(3)]
+
+
+def test_a_comment_on_a_whole_file_goes_under_its_header_before_its_rows() -> None:
+    document = build_document(diff_of(APP), (ON_B, file_comment(4, "app.py")), ViewMode.UNIFIED)
+
+    assert document.positions[1:4] == (HeaderAt("app.py"), CommentAt(4), RowAt("app.py", 0))
+    assert comment_row(document, 4) == HeaderAt("app.py")
 
 
 def test_split_document_pairs_rows() -> None:

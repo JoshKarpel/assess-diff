@@ -275,3 +275,14 @@ async def test_keys_the_name_field_leaves_alone_do_nothing_while_renaming(harnes
     await harness.run([*keys("o", "j", "e", Key.Down, "d", "d"), ENTER, ESCAPE])
 
     assert (harness.store.load("other").review.name, harness.store.path(REVIEW_ID).exists()) == ("seconddd", True)
+
+
+async def test_the_dialogs_keys_are_pills_as_the_screens_footer_draws_them(harness: Harness) -> None:
+    await harness.run([*keys("o"), showing("Reviews"), harness.shot()])
+
+    (footer,) = (
+        colored
+        for plain, colored in zip(harness.frames[0].splitlines(), harness.colored[0].splitlines(), strict=True)
+        if "esc close   ● open" in plain
+    )
+    assert "48;2;51;65;85" in footer, "the pills are on the dialog's lighter pill color"

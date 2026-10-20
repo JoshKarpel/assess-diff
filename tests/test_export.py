@@ -10,6 +10,7 @@ from tests.builders import added
 from tests.builders import comment
 from tests.builders import context
 from tests.builders import diff_of
+from tests.builders import file_comment
 from tests.builders import modified
 from tests.builders import removed
 from tests.builders import review
@@ -22,7 +23,7 @@ FILE = modified(
 )
 
 
-def test_markdown_lists_comments_in_creation_order_with_references_and_excerpts() -> None:
+def test_markdown_lists_comments_in_creation_order_with_references_and_no_excerpt_of_current_lines() -> None:
     later_in_file = comment(
         1,
         "src/app.py",
@@ -44,18 +45,9 @@ def test_markdown_lists_comments_in_creation_order_with_references_and_excerpts(
         "\n"
         "## 1. `src/app.py:2`\n"
         "\n"
-        "```diff\n"
-        "-    return None\n"
-        "+    return compute()\n"
-        "```\n"
-        "\n"
         "Why compute here?\n"
         "\n"
         "## 2. `src/app.py:1`\n"
-        "\n"
-        "```diff\n"
-        " def handler():\n"
-        "```\n"
         "\n"
         "Rename this, see #1.\n"
     )
@@ -99,10 +91,26 @@ def test_an_empty_comment_body_leaves_no_blank_section() -> None:
         review(comment(1, "src/app.py", 1, 1, ((LineKind.CONTEXT, "def handler():"),))), diff_of(FILE)
     )
 
-    assert markdown.endswith("```diff\n def handler():\n```\n")
+    assert markdown.endswith("## 1. `src/app.py:1`\n")
 
 
 def test_excerpt_fence_is_longer_than_any_backtick_run_inside() -> None:
     excerpt = (ExcerptLine(kind=LineKind.ADDED, text='doc = """```python"""'),)
 
     assert excerpt_block(excerpt) == '````diff\n+doc = """```python"""\n````'
+
+
+def test_markdown_names_a_whole_file_by_its_path() -> None:
+    markdown = to_markdown(review(file_comment(4, "src/app.py", body="Split this up.")), diff_of(FILE))
+
+    assert markdown.split("\n\n")[1:] == ["## 4. `src/app.py`", "Split this up.\n"]
+
+
+def test_markdown_says_when_a_commented_file_has_left_the_diff() -> None:
+    markdown = to_markdown(review(file_comment(5, "src/gone.py", body="Gone.")), diff_of(FILE))
+
+    assert markdown.split("\n\n")[1:] == [
+        "## 5. `src/gone.py`",
+        "_This file has left the diff since this comment was written._",
+        "Gone.\n",
+    ]

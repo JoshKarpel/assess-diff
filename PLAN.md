@@ -22,18 +22,20 @@ without a browser, a pushed branch, or the risk of losing half-written comments?
   A file watcher on the worktree recomputes the diff whenever files change,
   so the view follows the agent's edits.
 - **Two bases, toggleable.**
-  Review against `HEAD` (the change since the last commit)
+  Review against `HEAD` (the change since the last commit), which a new review starts on,
   or against the merge base with the default branch (the whole branch, as a PR would show it).
 - **Unified and split views**, toggleable.
 - **One long scroll** of whole files, each changed file under a separator header.
 - **Tab stops on hunks and comments.**
   Tab and Shift+Tab move between them,
   which is how you cross a large file quickly without paging through it.
-- **Comment on any line or contiguous range**, in or out of a hunk.
+- **Comment on any line or contiguous range**, in or out of a hunk, or on a whole file.
 - **One top-level review comment**, as GitHub's review summary,
   written in a dialog docked over the bottom of the diff, so writing it never moves your place.
 - **File picker** on the left, as GitHub's new PR review page has:
-  Enter or a click jumps to the file.
+  a tree of the changed files, as wide as its widest row, with folding directories,
+  a filter that narrows it to the paths matching what's typed,
+  and Enter or a click jumps to the file.
 - **Syntax highlighting**, in a theme chosen from an autocomplete picker.
 - **Mouse and keyboard** for everything.
 - **Export to Markdown** with line references, comments in **creation order**,
@@ -175,6 +177,8 @@ The base is `HEAD`, or `git merge-base HEAD <branch>`,
 where the branch is `--base` if given, otherwise what `origin/HEAD` points at,
 otherwise a local `main` or `master`.
 With none of those, the view stays on `HEAD`, and `b` says to pass `--base`.
+A new review starts on `HEAD`, or on the merge base when `--base` names a branch;
+a resumed one keeps the base it was last viewed against.
 
 ### Live reload: watchfiles, filtered by git
 
@@ -208,6 +212,10 @@ so when the lines at the anchor no longer match the excerpt,
 the comment is drawn as **outdated** (as GitHub does) at its original position,
 and the export says so and quotes the excerpt, so the agent sees what was commented on.
 Comments on files that left the diff are drawn after every file.
+
+A comment can also anchor to a whole file, with no side or lines (`side` is `null` in the file),
+made with Enter on the file's header and drawn under it.
+It's outdated only once its file leaves the diff.
 Re-anchoring by searching for the excerpt is [later](#later).
 
 Comments are numbered in creation order, and the number is shown in the UI,
@@ -278,23 +286,34 @@ The top-level comment.
 
 ## 1. `src/app.py:42-45`
 
+The comment body.
+
+## 2. `src/old.py`, removed lines 10-12 (in `abc1234`)
+
+...
+
+## 3. `src/handler.py:7`
+
+_These lines have changed since this comment was written; the excerpt shows them as they were._
+
 ```diff
- def handler():
 -    return None
 +    return compute()
 ```
 
 The comment body.
 
-## 2. `src/old.py`, removed lines 10-12 (in `abc1234`)
+## 4. `src/views.py`
 
-...
+A comment on the whole file.
 ````
 
 New-side ranges use `path:line` or `path:start-end`, which agents read as file references.
-Old-side ranges say they're removed lines and name the base commit.
-Each comment quotes its excerpt as a `diff` block, fenced with more backticks than any run inside it,
-so the reference survives later edits, and outdated comments say so.
+Old-side ranges say they're removed lines and name the base commit,
+and a comment on a whole file names just its path.
+The agent can read the lines a reference points at, so a comment quotes its excerpt only once it's outdated,
+when the working tree no longer has those lines anywhere:
+as a `diff` block, fenced with more backticks than any run inside it.
 
 `c` copies it with counterweight's `CopyToClipboard` (OSC 52),
 which works where the terminal supports it, and tmux passes it on only with `set -g set-clipboard on`.
@@ -310,7 +329,7 @@ which works where the terminal supports it, and tmux passes it on only with `set
 | Home, End                   | Move the cursor to the summary or the last line                 |
 | Tab, Shift+Tab              | Next or previous hunk or comment                                |
 | `n`, `N`                    | Next or previous comment                                        |
-| Enter                       | Comment on the selection, or edit the comment under the cursor  |
+| Enter                       | Comment on the selection or, on a header, the whole file; or edit the comment under the cursor |
 | Escape                      | Finish editing (an empty comment is discarded), or clear the selection |
 | `d`, `d`                    | Delete the comment under the cursor (pressed twice, to confirm) |
 | `r`                         | Write the review summary, in a dialog that keeps your place     |
@@ -318,13 +337,22 @@ which works where the terminal supports it, and tmux passes it on only with `set
 | `s`                         | Toggle unified and split views                                  |
 | `b`                         | Toggle the base between `HEAD` and the merge base               |
 | `t`                         | Choose the syntax theme                                         |
-| `f`                         | Focus the file picker; Enter there jumps to the file            |
+| `f`                         | Focus the file picker, unfolding it if it's folded away         |
+| `F`                         | Fold the file picker away, or back                              |
+| `?`                         | Fold the diff's key hints away, or back                         |
 | `o`                         | Open the review manager                                         |
 | `c`                         | Copy the review as Markdown                                     |
 | `q`                         | Quit; the review is already saved                               |
 
+In the file picker, Enter jumps to a file, or folds or unfolds a directory, as Left and Right do,
+and `/` narrows it to the files whose paths match what's typed, as the theme picker narrows themes:
+Enter jumps to the highlighted match, and Escape goes back to the tree.
+
 Tab, Shift+Tab, or an Escape nothing else takes, pressed in a dialog or an editor, closes it and returns to the diff,
 as Escape does in each, so nothing is left open without focus.
+
+The status line and the key hints are drawn as pills, as zellij's status bar is,
+and wrap onto more rows between pills rather than running off a narrow screen.
 
 Clicking a line moves the cursor there, Shift+click extends the selection,
 clicking a comment edits it, clicking the summary opens its dialog, clicking the review's name renames it,
@@ -336,7 +364,8 @@ The wheel scrolls either pane.
 - `assess-diff`: open the TUI on the current worktree's latest review, or a new one.
 - `assess-diff --new`: start a new review.
 - `assess-diff --review <id>`: open a specific review.
-- `assess-diff --base <branch>`: take the merge base with `<branch>` rather than the default branch.
+- `assess-diff --base <branch>`: take the merge base with `<branch>` rather than the default branch,
+  and start a new review on it.
 - `assess-diff list`: the project's reviews, the current worktree's first, with their names.
 - `assess-diff show [<id>]`: print a review as Markdown (the latest for this worktree by default).
 - `assess-diff delete <id>`: delete a review.

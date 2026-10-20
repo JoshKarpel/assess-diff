@@ -14,6 +14,7 @@ from assess_diff.cli import cli
 from assess_diff.cli import latest
 from assess_diff.cli import main
 from assess_diff.cli import now
+from assess_diff.cli import starting_base
 from assess_diff.cli import target_branch
 from assess_diff.cli import with_default_command
 from assess_diff.diff import BaseMode
@@ -135,7 +136,7 @@ def test_show_prints_the_latest_review_as_markdown(project: ReviewStore, scratch
 
     assert code == 0
     assert out.startswith("# Review of `main` against `HEAD` (`")
-    assert out.endswith("## 1. `app.py:1`\n\n```diff\n+one = 2\n```\n\nWhy two?\n")
+    assert out.endswith("## 1. `app.py:1`\n\nWhy two?\n")
 
 
 def test_show_takes_an_id(project: ReviewStore, scratch: Scratch) -> None:
@@ -249,5 +250,12 @@ def test_main_reports_an_unreadable_review(
     assert (exited.value.code, capsys.readouterr().err) == (
         1,
         f"assess-diff: Can't read the review in {project.directory / 'future.json'}: "
-        "This review is version 99, and this assess-diff reads up to version 2\n",
+        "This review is version 99, and this assess-diff reads up to version 3\n",
     )
+
+
+@pytest.mark.parametrize(
+    ("base", "mode"), [(None, BaseMode.HEAD), ("trunk", BaseMode.MERGE_BASE)], ids=["default", "named"]
+)
+def test_a_new_review_starts_against_head_unless_a_base_branch_is_named(base: str | None, mode: BaseMode) -> None:
+    assert starting_base(base) is mode

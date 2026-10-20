@@ -29,6 +29,7 @@ from tests.builders import added
 from tests.builders import comment
 from tests.builders import context
 from tests.builders import diff_of
+from tests.builders import file_comment
 from tests.builders import modified
 from tests.builders import removed
 from tests.builders import review
@@ -92,7 +93,7 @@ def test_review_start_is_empty_and_numbers_from_one() -> None:
     started = review()
 
     assert (started.version, started.summary, started.comments, started.next_number, started.base_mode) == (
-        2,
+        3,
         "",
         (),
         1,
@@ -170,13 +171,14 @@ def test_old_side_comment_is_outdated_against_another_base() -> None:
 
 
 V1 = (Path(__file__).parent / "fixtures" / "review-v1.json").read_bytes()
+V2 = (Path(__file__).parent / "fixtures" / "review-v2.json").read_bytes()
 
 
 def test_parse_review_migrates_a_version_1_review_by_naming_it_for_its_start() -> None:
     migrated = parse_review(V1)
 
     original = json.loads(V1)
-    assert (migrated.version, migrated.name) == (2, default_name(datetime.fromisoformat(original["created"])))
+    assert (migrated.version, migrated.name) == (3, default_name(datetime.fromisoformat(original["created"])))
     assert [comment.body for comment in migrated.comments] == [comment["body"] for comment in original["comments"]]
 
 
@@ -204,11 +206,11 @@ def test_parse_review_refuses_an_anchor_whose_base_commit_does_not_match_its_sid
 @pytest.mark.parametrize(
     ("content", "message"),
     [
-        (b'{"version": 3}', r"^This review is version 3, and this assess-diff reads up to version 2$"),
-        (b'{"id": "x"}', r"^This review is version None, and this assess-diff reads up to version 2$"),
-        (b'{"version": "1"}', r"^This review is version '1', and this assess-diff reads up to version 2$"),
-        (b'{"version": 1.0}', r"^This review is version 1\.0, and this assess-diff reads up to version 2$"),
-        (b'{"version": [1]}', r"^This review is version \[1\], and this assess-diff reads up to version 2$"),
+        (b'{"version": 4}', r"^This review is version 4, and this assess-diff reads up to version 3$"),
+        (b'{"id": "x"}', r"^This review is version None, and this assess-diff reads up to version 3$"),
+        (b'{"version": "1"}', r"^This review is version '1', and this assess-diff reads up to version 3$"),
+        (b'{"version": 1.0}', r"^This review is version 1\.0, and this assess-diff reads up to version 3$"),
+        (b'{"version": [1]}', r"^This review is version \[1\], and this assess-diff reads up to version 3$"),
         (b"[1, 2]", r"^A review file holds a JSON object$"),
         (b'{"version": 1, "created": 5}', r"^A review's start time is 5, not a timestamp$"),
     ],
@@ -222,3 +224,21 @@ def test_default_name_is_the_local_minute_it_started() -> None:
     started = datetime(2026, 2, 3, 4, 5, 6, tzinfo=UTC)
 
     assert default_name(started) == started.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def test_parse_review_migrates_a_version_2_review_changing_only_its_version() -> None:
+    migrated = parse_review(V2)
+
+    original = json.loads(V2)
+    assert json.loads(migrated.model_dump_json()) == {**original, "version": 3}
+
+
+def test_parse_review_reads_a_comment_on_a_whole_file() -> None:
+    current = review(file_comment(1, "src/app.py", body="split this up"))
+
+    assert parse_review(current.model_dump_json().encode()) == current
+
+
+@pytest.mark.parametrize(("path", "outdated"), [("src/app.py", False), ("src/gone.py", True)], ids=["in", "gone"])
+def test_a_comment_on_a_whole_file_is_outdated_only_once_the_file_leaves_the_diff(path: str, outdated: bool) -> None:
+    assert is_outdated(file_comment(1, path), diff_of(FILE)) is outdated

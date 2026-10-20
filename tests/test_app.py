@@ -11,6 +11,7 @@ from counterweight.elements import Chunk
 from counterweight.events import KeyPressed
 from counterweight.focus import FocusHandle
 from counterweight.keys import Key
+from counterweight.styles.utilities import text_bg
 from counterweight.styles.utilities import text_bold
 from counterweight.styles.utilities import text_color
 
@@ -22,7 +23,11 @@ from assess_diff.export import to_markdown
 from assess_diff.navigation import ViewMode
 from assess_diff.navigation import build_document
 from assess_diff.preferences import PreferencesFile
+from assess_diff.review import Comment
 from assess_diff.review import ExcerptLine
+from assess_diff.review import FileAnchor
+from assess_diff.review import NewAnchor
+from assess_diff.review import OldAnchor
 from assess_diff.review import Review
 from assess_diff.review import edit_summary
 from assess_diff.storage import OpenReview
@@ -36,6 +41,7 @@ from assess_diff.ui.app import copied
 from assess_diff.ui.app import key_hints
 from assess_diff.ui.app import other_base
 from assess_diff.ui.app import status_line
+from assess_diff.ui.pills import pills
 from assess_diff.ui.theme_picker import Query
 from tests.builders import added
 from tests.builders import comment
@@ -49,6 +55,7 @@ from tests.harness import REVIEW_ID
 from tests.harness import Harness
 from tests.harness import click
 from tests.harness import keys
+from tests.harness import screen_text
 from tests.harness import showing
 from tests.harness import typed
 from tests.harness import where
@@ -77,11 +84,17 @@ def harness(scratch: Scratch, tmp_path: Path) -> Harness:
     )
 
 
+def lines(comment: Comment) -> NewAnchor | OldAnchor:
+    """The anchor of a comment on lines, as every comment made with Enter on a row is."""
+    assert isinstance(comment.anchor, NewAnchor | OldAnchor)
+    return comment.anchor
+
+
 async def test_tab_reaches_the_first_hunk_and_enter_comments_on_it(harness: Harness) -> None:
     await harness.run([TAB, ENTER, *typed("why six?"), ESCAPE])
 
     (made,) = harness.review().comments
-    assert (made.number, made.anchor.side, made.anchor.start, made.anchor.end, made.body) == (
+    assert (made.number, lines(made).side, lines(made).start, lines(made).end, made.body) == (
         1,
         Side.OLD,
         11,
@@ -95,7 +108,7 @@ async def test_extending_the_selection_comments_on_the_range(harness: Harness) -
     await harness.run([TAB, *keys(Key.Down, "J", "J"), ENTER, *typed("range"), ESCAPE])
 
     (made,) = harness.review().comments
-    assert (made.anchor.path, made.anchor.side, made.anchor.start, made.anchor.end) == ("app.py", Side.NEW, 11, 13)
+    assert (lines(made).path, lines(made).side, lines(made).start, lines(made).end) == ("app.py", Side.NEW, 11, 13)
     assert [line.kind for line in made.excerpt] == [LineKind.ADDED, LineKind.CONTEXT, LineKind.CONTEXT]
 
 
@@ -110,7 +123,7 @@ async def test_escape_clears_the_selection(harness: Harness) -> None:
     await harness.run([TAB, *keys("J", Key.Escape), ENTER, *typed("one line"), ESCAPE])
 
     (made,) = harness.review().comments
-    assert (made.anchor.side, made.anchor.start, made.anchor.end) == (Side.NEW, 11, 11)
+    assert (lines(made).side, lines(made).start, lines(made).end) == (Side.NEW, 11, 11)
 
 
 async def test_escape_on_an_empty_new_comment_discards_it(harness: Harness) -> None:
@@ -129,13 +142,13 @@ async def test_n_and_shift_n_jump_between_comments(harness: Harness) -> None:
         ]
     )
 
-    assert [(c.number, c.anchor.start, c.body) for c in harness.review().comments] == [(1, 11, "one!"), (2, 41, "two")]
+    assert [(c.number, lines(c).start, c.body) for c in harness.review().comments] == [(1, 11, "one!"), (2, 41, "two")]
 
 
 async def test_shift_tab_goes_back_to_the_previous_stop(harness: Harness) -> None:
     await harness.run([TAB, TAB, KeyPressed(key=Key.BackTab), ENTER, *typed("back"), ESCAPE])
 
-    assert harness.review().comments[0].anchor.start == 11
+    assert lines(harness.review().comments[0]).start == 11
 
 
 async def test_d_twice_deletes_the_comment_under_the_cursor(harness: Harness) -> None:
@@ -172,10 +185,17 @@ async def test_enter_on_the_summary_edits_it(harness: Harness) -> None:
     assert harness.review().summary == "s"
 
 
-async def test_enter_on_a_file_header_does_nothing(harness: Harness) -> None:
-    await harness.run([*keys(Key.Down), ENTER, harness.shot()])
+async def test_enter_on_a_file_header_comments_on_the_whole_file(harness: Harness) -> None:
+    await harness.run([*keys(Key.Down), ENTER, *typed("split this up"), ESCAPE])
 
-    assert not harness.store.path(REVIEW_ID).exists()
+    (made,) = harness.review().comments
+    assert (made.anchor, made.excerpt, made.body) == (FileAnchor(path="app.py", side=None), (), "split this up")
+
+
+async def test_escape_on_an_empty_file_comment_discards_it(harness: Harness) -> None:
+    await harness.run([*keys(Key.Down), ENTER, ESCAPE, harness.shot()])
+
+    assert harness.review().comments == ()
     assert "esc done" not in harness.frames[0]
 
 
@@ -192,7 +212,7 @@ async def test_split_view_comments_anchor_to_the_working_tree(harness: Harness) 
     await harness.run([*keys("s"), TAB, ENTER, *typed("split"), ESCAPE])
 
     (made,) = harness.review().comments
-    assert (made.anchor.side, made.anchor.start) == (Side.NEW, 11)
+    assert (lines(made).side, lines(made).start) == (Side.NEW, 11)
 
 
 async def test_s_twice_returns_to_the_unified_view(harness: Harness) -> None:
@@ -214,6 +234,13 @@ async def test_b_without_a_branch_to_merge_with_says_so(harness: Harness) -> Non
     await harness.run([*keys("b"), harness.shot()], target=None)
 
     assert "No branch to take a merge base with; pass one with --base" in harness.frames[0]
+
+
+async def test_a_notice_is_centered(harness: Harness) -> None:
+    await harness.run([*keys("b"), harness.shot()], target=None)
+
+    (line,) = (line for line in harness.frames[0].splitlines() if "No branch to take" in line)
+    assert abs((len(line) - len(line.lstrip())) - (len(line) - len(line.rstrip()))) <= 1
 
 
 async def test_a_git_failure_shows_as_a_notice(harness: Harness) -> None:
@@ -332,7 +359,7 @@ async def test_file_picker_jumps_to_a_file(harness: Harness) -> None:
     await harness.run([*keys("f", Key.Down, Key.Enter, Key.Down), ENTER, *typed("on notes"), ESCAPE])
 
     (made,) = harness.review().comments
-    assert (made.anchor.path, made.anchor.start) == ("notes.md", 1)
+    assert (lines(made).path, lines(made).start) == ("notes.md", 1)
 
 
 async def test_file_picker_keys_stop_at_either_end(harness: Harness) -> None:
@@ -344,7 +371,7 @@ async def test_file_picker_keys_stop_at_either_end(harness: Harness) -> None:
 async def test_tab_from_the_file_picker_returns_to_the_diff(harness: Harness) -> None:
     await harness.run([*keys("f", Key.Tab, Key.Tab), ENTER, *typed("x"), ESCAPE])
 
-    assert harness.review().comments[0].anchor.start == 11
+    assert lines(harness.review().comments[0]).start == 11
 
 
 async def test_clicking_a_row_puts_the_cursor_there(harness: Harness) -> None:
@@ -354,7 +381,7 @@ async def test_clicking_a_row_puts_the_cursor_there(harness: Harness) -> None:
     await harness.run([*click(row.x, row.y), ENTER, *typed("clicked"), ESCAPE])
 
     (made,) = harness.review().comments
-    assert (made.anchor.side, made.anchor.start) == (Side.NEW, 11)
+    assert (lines(made).side, lines(made).start) == (Side.NEW, 11)
 
 
 async def test_shift_clicking_extends_the_selection(harness: Harness) -> None:
@@ -367,7 +394,7 @@ async def test_shift_clicking_extends_the_selection(harness: Harness) -> None:
     assert harness.review().comments == ()
     await harness.run([*click(start.x, start.y), *click(end.x, end.y, shift=True), ENTER, *typed("r"), ESCAPE])
     (made,) = harness.review().comments
-    assert (made.anchor.side, made.anchor.start, made.anchor.end) == (Side.NEW, 10, 13)
+    assert (lines(made).side, lines(made).start, lines(made).end) == (Side.NEW, 10, 13)
 
 
 async def test_clicking_a_comment_edits_it(harness: Harness) -> None:
@@ -394,7 +421,7 @@ async def test_clicking_a_header_then_down_reaches_its_first_row(harness: Harnes
 
     await harness.run([*click(header.x, header.y), *keys(Key.Down), ENTER, *typed("top"), ESCAPE])
 
-    assert harness.review().comments[0].anchor.start == 1
+    assert lines(harness.review().comments[0]).start == 1
 
 
 async def test_clicking_a_file_in_the_picker_jumps_to_it(harness: Harness) -> None:
@@ -410,7 +437,7 @@ async def test_page_and_end_keys_move_far(harness: Harness) -> None:
     await harness.run([*keys(Key.End), ENTER, *typed("last"), ESCAPE, *keys(Key.Home, Key.PageDown, Key.PageUp)])
 
     assert harness.review().comments[0].anchor.path == "notes.md"
-    assert harness.review().comments[0].anchor.start == 3
+    assert lines(harness.review().comments[0]).start == 3
 
 
 async def test_moving_down_from_the_top_of_a_scrolled_view_leaves_the_view_be(harness: Harness) -> None:
@@ -422,8 +449,8 @@ async def test_moving_down_from_the_top_of_a_scrolled_view_leaves_the_view_be(ha
     assert harness.frames[1] == harness.frames[0]
 
 
-# Seven eighths of the pane, which is the screen less the status line and the key hints.
-PAGE = int((HEIGHT - 2) * 0.875)
+# Seven eighths of the pane, which is the screen less the status line and the two rows the key hints wrap to.
+PAGE = int((HEIGHT - 3) * 0.875)
 
 
 async def test_page_down_scrolls_the_view_by_seven_eighths_of_it(harness: Harness) -> None:
@@ -442,7 +469,7 @@ async def test_page_down_moves_the_cursor_as_far_as_the_view_scrolls(harness: Ha
     # From the summary, past the header and the rows, the removed line 11 among them.
     await harness.run([*keys(Key.PageDown), ENTER, *typed("x"), ESCAPE])
 
-    assert harness.review().comments[0].anchor.start == PAGE - 2
+    assert lines(harness.review().comments[0]).start == PAGE - 2
 
 
 async def test_the_diff_follows_a_file_written_while_it_is_open(harness: Harness) -> None:
@@ -464,7 +491,7 @@ async def test_a_refresh_that_succeeds_clears_the_git_failure_and_no_other_notic
         harness.scratch.write("later.py", "appeared = True\n")
         return True
 
-    recovered = WaitFor(lambda frame: "failed" not in frame.text(ansi=False), timeout=timedelta(seconds=10))
+    recovered = WaitFor(lambda frame: "failed" not in screen_text(frame), timeout=timedelta(seconds=10))
     await harness.run(
         [
             *keys("b"),
@@ -502,13 +529,13 @@ async def test_a_selection_is_kept_within_its_file_when_the_file_shrinks(harness
     )
 
     (made,) = harness.review().comments
-    assert (made.anchor.path, made.anchor.start, made.anchor.end) == ("notes.md", 1, 1)
+    assert (lines(made).path, lines(made).start, lines(made).end) == ("notes.md", 1, 1)
 
 
 async def test_up_moves_the_cursor_back(harness: Harness) -> None:
     await harness.run([TAB, *keys(Key.Down, Key.Down, "k", Key.Up), ENTER, *typed("x"), ESCAPE])
 
-    assert (harness.review().comments[0].anchor.side, harness.review().comments[0].anchor.start) == (Side.OLD, 11)
+    assert (lines(harness.review().comments[0]).side, lines(harness.review().comments[0]).start) == (Side.OLD, 11)
 
 
 async def test_a_commit_in_a_linked_worktree_updates_its_head_diff(harness: Harness, tmp_path: Path) -> None:
@@ -533,8 +560,8 @@ async def test_a_commit_in_a_linked_worktree_updates_its_head_diff(harness: Harn
 async def test_status_line_counts_files_and_comments(harness: Harness) -> None:
     await harness.run([harness.shot(), TAB, ENTER, *typed("x"), ESCAPE, harness.shot()])
 
-    assert "2 files  0 comments  unified" in harness.frames[0]
-    assert "1 comment  unified" in harness.frames[1]
+    assert " 2 files +5 -2   0 comments   unified " in harness.frames[0]
+    assert " 1 comment   unified " in harness.frames[1]
 
 
 async def test_comments_on_files_that_left_the_diff_are_drawn_last(harness: Harness) -> None:
@@ -610,12 +637,24 @@ def test_other_base_switches_between_the_two_bases(mode: BaseMode, other: BaseMo
     assert other_base(mode) is other
 
 
-def status_chunks(branch: str, against: str, counts: str) -> tuple[Chunk, ...]:
+def status_groups(branch: str, against: str, *counts: tuple[Chunk, ...]) -> tuple[tuple[Chunk, ...], ...]:
     return (
-        Chunk(content=branch, style=text_bold),
-        Chunk(content=against, style=text_color("slate", 300)),
-        Chunk(content=counts, style=text_color("slate", 400)),
+        (Chunk(content=branch, style=text_bold),),
+        (Chunk(content=against, style=text_color("slate", 300)),),
+        *counts,
     )
+
+
+def files_group(files: str, additions: str, deletions: str) -> tuple[Chunk, ...]:
+    return (
+        Chunk(content=files, style=text_color("slate", 400)),
+        Chunk(content=additions, style=text_color("green", 400)),
+        Chunk(content=deletions, style=text_color("red", 400)),
+    )
+
+
+def quiet(content: str) -> tuple[Chunk, ...]:
+    return (Chunk(content=content, style=text_color("slate", 400)),)
 
 
 FIRST = comment(1, "a.py", 2, 2, ((LineKind.ADDED, "two"),))
@@ -633,25 +672,37 @@ CHANGED_FILES = (
             review(branch=None),
             None,
             ViewMode.UNIFIED,
-            status_chunks(" detached HEAD ", "reading the diff…", "    0 comments  unified"),
+            status_groups("detached HEAD", "reading the diff…", quiet("0 comments"), quiet("unified")),
         ),
         (
             review(FIRST, branch="topic/one"),
             diff_of(CHANGED_FILES[0], mode=BaseMode.HEAD, label="HEAD"),
             ViewMode.SPLIT,
-            status_chunks(" topic/one ", "against HEAD c0ffee0", "  1 file  1 comment  split"),
+            status_groups(
+                "topic/one",
+                "against HEAD c0ffee0",
+                files_group("1 file", " +1", " -1"),
+                quiet("1 comment"),
+                quiet("split"),
+            ),
         ),
         (
             review(FIRST, SECOND, branch="feature/x"),
             diff_of(*CHANGED_FILES, mode=BaseMode.MERGE_BASE, label="trunk"),
             ViewMode.UNIFIED,
-            status_chunks(" feature/x ", "against trunk (merge base c0ffee0)", "  2 files  2 comments  unified"),
+            status_groups(
+                "feature/x",
+                "against trunk (merge base c0ffee0)",
+                files_group("2 files", " +1", " -2"),
+                quiet("2 comments"),
+                quiet("unified"),
+            ),
         ),
     ],
     ids=["loading-detached", "head", "merge-base"],
 )
 def test_status_line_says_the_branch_the_base_and_the_counts(
-    reviewed: Review, diff: Diff | None, mode: ViewMode, expected: tuple[Chunk, ...]
+    reviewed: Review, diff: Diff | None, mode: ViewMode, expected: tuple[tuple[Chunk, ...], ...]
 ) -> None:
     assert status_line(reviewed, diff, mode) == expected
 
@@ -659,36 +710,100 @@ def test_status_line_says_the_branch_the_base_and_the_counts(
 HANDLE = FocusHandle()
 
 
+def test_key_hints_list_the_diffs_keys() -> None:
+    assert key_hints(INITIAL_SESSION, True) == (
+        "↑↓ move",
+        "⇧↑↓ select",
+        "tab hunk/comment",
+        "n/N comment",
+        "enter comment",
+        "dd delete",
+        "r summary",
+        "e rename",
+        "s split",
+        "b base",
+        "t theme",
+        "f files",
+        "F fold files",
+        "o reviews",
+        "c copy",
+        "⇧? fold keys",
+        "q quit",
+    )
+
+
+def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
+    assert key_hints(INITIAL_SESSION, False) == ()
+
+
 @pytest.mark.parametrize(
     ("session", "hints"),
     [
-        (
-            INITIAL_SESSION,
-            " ↑↓ move  ⇧↑↓ select  tab hunk/comment  n/N comment  enter comment  dd delete  r summary  e rename"
-            "  s split  b base  t theme  f files  o reviews  c copy  q quit",
-        ),
-        (replace(INITIAL_SESSION, naming=Naming(HANDLE, "draft")), " enter rename  esc keep the old name"),
+        (replace(INITIAL_SESSION, naming=Naming(HANDLE, "draft")), ("enter rename", "esc keep the old name")),
         (
             replace(INITIAL_SESSION, managing=Managing(HANDLE, ())),
-            " ↑↓ choose  enter open  e rename  dd delete  esc close",
+            ("↑↓ choose", "enter open", "e rename", "dd delete", "esc close"),
         ),
         (
             replace(INITIAL_SESSION, picking_theme=PickingTheme(HANDLE, Query(text="mono", highlighted=2))),
-            " type to filter  ↑↓ preview  enter keep  esc revert",
+            ("type to filter", "↑↓ preview", "enter keep", "esc revert"),
         ),
         (
             replace(INITIAL_SESSION, editing=(3, HANDLE)),
-            " esc done  (everything you type is saved as you type it)",
+            ("esc done",),
         ),
         (
             replace(INITIAL_SESSION, confirming_delete=7),
-            " press d again to delete #7, anything else to keep it",
+            ("press d again to delete #7", "anything else to keep it"),
         ),
     ],
-    ids=["diff", "naming", "managing", "picking-theme", "editing", "confirming-delete"],
+    ids=["naming", "managing", "picking-theme", "editing", "confirming-delete"],
 )
-def test_key_hints_list_the_keys_of_what_has_focus(session: Session, hints: str) -> None:
-    assert key_hints(session) == hints
+def test_key_hints_list_the_keys_of_what_has_focus_even_folded(session: Session, hints: tuple[str, ...]) -> None:
+    assert key_hints(session, False) == hints
+
+
+def test_pills_pad_each_group_on_its_background_a_bare_space_apart_keeping_its_words_together() -> None:
+    green = text_color("green", 400)
+    on_pill = text_bg("slate", 900)
+    edge = Chunk(content="\N{NO-BREAK SPACE}", style=on_pill)
+
+    assert pills(((Chunk(content="t theme"),), (Chunk(content="2 files"), Chunk(content=" +3", style=green)))) == (
+        edge,
+        Chunk(content="t\N{NO-BREAK SPACE}theme", style=on_pill),
+        edge,
+        Chunk(content=" "),
+        edge,
+        Chunk(content="2\N{NO-BREAK SPACE}files", style=on_pill),
+        Chunk(content="\N{NO-BREAK SPACE}+3", style=green | on_pill),
+        edge,
+    )
+
+
+async def test_the_footer_wraps_between_hints_rather_than_cutting_them_off(harness: Harness) -> None:
+    await harness.run([harness.shot()])
+
+    *_, before_last, last = harness.frames[0].splitlines()
+    assert ("enter comment" in before_last, last.split()[-2:]) == (True, ["q", "quit"])
+
+
+async def test_question_mark_folds_the_keys_away_and_back(harness: Harness) -> None:
+    await harness.run([*keys("?"), harness.shot(), *keys("?"), harness.shot()])
+
+    assert ["q quit" in frame for frame in harness.frames] == [False, True]
+
+
+async def test_shift_f_folds_the_files_away_and_back(harness: Harness) -> None:
+    await harness.run([*keys("F"), harness.shot(), *keys("F"), harness.shot()])
+
+    assert ["? notes.md" in frame for frame in harness.frames] == [False, True]
+
+
+async def test_f_unfolds_the_files_to_choose_one(harness: Harness) -> None:
+    await harness.run([*keys("F", "f", Key.Down), ENTER, *keys(Key.Down), ENTER, *typed("on notes"), ESCAPE])
+
+    (made,) = harness.review().comments
+    assert (made.anchor.path, made.body) == ("notes.md", "on notes")
 
 
 async def test_writing_the_summary_keeps_the_cursor_where_it_was(harness: Harness) -> None:
@@ -697,12 +812,25 @@ async def test_writing_the_summary_keeps_the_cursor_where_it_was(harness: Harnes
     )
 
     assert harness.review().summary == "Overall fine."
-    assert (harness.review().comments[0].anchor.start, harness.review().comments[0].body) == (41, "here")
+    assert (lines(harness.review().comments[0]).start, harness.review().comments[0].body) == (41, "here")
 
 
 async def test_the_summary_dialog_opens_over_the_diff(harness: Harness) -> None:
     await harness.run([TAB, TAB, *keys("r"), harness.shot(), ESCAPE, harness.shot()])
 
-    assert "esc done  (saved as you type)" in harness.frames[0]
+    assert harness.frames[0].count("esc done") == 2, "the dialog says it, as well as the footer"
     assert "return 26" in harness.frames[0], "the cursor's line stays in view above the dialog"
-    assert "esc done  (saved as you type)" not in harness.frames[1]
+    assert "esc done" not in harness.frames[1]
+
+
+async def test_the_files_picker_marks_the_file_the_cursor_is_in_on_the_header_background(harness: Harness) -> None:
+    await harness.run([TAB, harness.shot()])
+
+    slate = "48;2;15;23;42"
+    picker_rows = {
+        name: colored.split("│", 1)[0]
+        for plain, colored in zip(harness.frames[0].splitlines(), harness.colored[0].splitlines(), strict=True)
+        for name in ("app.py", "notes.md")
+        if name in plain.split("│", 1)[0]
+    }
+    assert {name: slate in row for name, row in picker_rows.items()} == {"app.py": True, "notes.md": False}

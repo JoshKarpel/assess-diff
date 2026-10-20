@@ -21,6 +21,7 @@ from assess_diff.diff import SplitRow
 from assess_diff.diff import split_rows
 from assess_diff.review import Anchor
 from assess_diff.review import Comment
+from assess_diff.review import FileAnchor
 
 
 class ViewMode(StrEnum):
@@ -141,9 +142,12 @@ class Document:
 def place(rows: tuple[Row, ...], comment: Comment) -> int:
     """
     The index of the row a comment is drawn after: the one showing the last line of its range,
-    or, when that line is gone, the last row before where it was, or `-1` when there's none.
+    or, when that line is gone, the last row before where it was, or `-1` when there's none,
+    which is where a comment on the whole file goes too, under its header.
     """
     anchor = comment.anchor
+    if isinstance(anchor, FileAnchor):
+        return -1
     best = -1
     for index, row in enumerate(rows):
         for line in row_lines(row):

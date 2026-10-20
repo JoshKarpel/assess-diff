@@ -219,7 +219,7 @@ def test_reviews_migrate_a_file_an_older_version_wrote(store: ReviewStore) -> No
 
     (found,) = store.reviews()
 
-    assert (found.version, found.id) == (2, "01a1569b119070abbe179a8da6ebf006")
+    assert (found.version, found.id) == (3, "01a1569b119070abbe179a8da6ebf006")
 
 
 def test_an_unreadable_review_names_its_file(store: ReviewStore) -> None:

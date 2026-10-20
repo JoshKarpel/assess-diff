@@ -104,6 +104,11 @@ def latest(store: ReviewStore, repository: Repository) -> Stored | None:
     return None if found is None else store.load(found.id)
 
 
+def starting_base(base: str | None) -> BaseMode:
+    """What a new review is against: the change since the last commit, unless `--base` named a branch to take the merge base with."""
+    return BaseMode.MERGE_BASE if base is not None else BaseMode.HEAD
+
+
 @command(
     "review",
     flag("--new", summary="Start a new review, rather than resuming this worktree's latest."),
@@ -122,7 +127,7 @@ async def review_command(workspace: Workspace, new: bool, review_id: str | None,
         else latest(workspace.store, repository)
     )
     if stored is None:
-        mode = BaseMode.MERGE_BASE if target is not None else BaseMode.HEAD
+        mode = starting_base(base)
         review = Review.start(new_id(), repository.common_dir, repository.worktree, repository.branch, mode, now())
         open_review = OpenReview(workspace.store, review, None, new_id, now)
     else:
