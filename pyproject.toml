@@ -1,0 +1,167 @@
+[build-system]
+requires = ["uv_build>=0.12.23"]
+build-backend = "uv_build"
+
+[project]
+name = "assess-diff"
+version = "0.1.0"
+description = "Review an agent's working-tree diff in the terminal, and hand the review back as Markdown"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "JoshKarpel", email = "josh.karpel@gmail.com" }
+]
+requires-python = ">=3.15"
+dependencies = [
+    "counterweight",
+    "pydantic>=2.11",
+    "pygments>=2.17",
+    "watchfiles>=1.0",
+    "without-cli>=0.0.10",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.4",
+    "pre-commit-hooks>=6.0.0",
+    "pytest>=9.0",
+    "pytest-asyncio>=1",
+    "pytest-xdist>=3",
+    "mypy>=2.4",
+    "ruff>=0.16.10",
+    "hypothesis>=6.169.0",
+    "pytest-randomly>=5.0.0",
+    "pytest-cov>=7.1.0",
+    "mutmut>=3.8.0",
+    "types-pygments>=2.21.0.20260819",
+    "check-jsonschema>=0.38.2",
+    "zizmor>=1.30.1",
+]
+
+[project.scripts]
+assess-diff = "assess_diff.cli:main"
+
+[tool.uv]
+exclude-newer = "7 days"
+# counterweight's layout engine, which counterweight tracks closely, so its main can need a release this new.
+exclude-newer-package = { waxy = false }
+
+[tool.uv.sources]
+counterweight = { git = "https://github.com/JoshKarpel/counterweight", branch = "main" }
+
+[tool.pytest.ini_options]
+addopts = ["--strict-markers", "-Werror", "--ignore-glob=mutants/*"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+faulthandler_timeout = 30
+faulthandler_exit_on_timeout = true
+
+[tool.mypy]
+pretty = true
+show_error_codes = true
+files = ["src", "tests"]
+exclude = ["mutants/"]
+strict = true
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["counterweight.*", "without_cli.*"]
+follow_untyped_imports = true
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "A",     # https://docs.astral.sh/ruff/rules/#flake8-builtins-a
+    "ASYNC", # https://docs.astral.sh/ruff/rules/#flake8-async-async
+    "B",     # https://docs.astral.sh/ruff/rules/#flake8-bugbear-b
+    "BLE",   # https://docs.astral.sh/ruff/rules/#flake8-blind-except-ble
+    "C4",    # https://docs.astral.sh/ruff/rules/#flake8-comprehensions-c4
+    "D",     # https://docs.astral.sh/ruff/rules/#pydocstyle-d
+    "DTZ",   # https://docs.astral.sh/ruff/rules/#flake8-datetimez-dtz
+    "E",     # https://docs.astral.sh/ruff/rules/#error-e
+    "F",     # https://docs.astral.sh/ruff/rules/#pyflakes-f
+    "FA",    # https://docs.astral.sh/ruff/rules/#flake8-future-annotations-fa
+    "FLY",   # https://docs.astral.sh/ruff/rules/#flynt-fly
+    "FURB",  # https://docs.astral.sh/ruff/rules/#refurb-furb
+    "G",     # https://docs.astral.sh/ruff/rules/#flake8-logging-format-g
+    "I",     # https://docs.astral.sh/ruff/rules/#isort-i
+    "ICN",   # https://docs.astral.sh/ruff/rules/#flake8-import-conventions-icn
+    "LOG",   # https://docs.astral.sh/ruff/rules/#flake8-logging-log
+    "N",     # https://docs.astral.sh/ruff/rules/#pep8-naming-n
+    "PERF",  # https://docs.astral.sh/ruff/rules/#perflint-perf
+    "PGH",   # https://docs.astral.sh/ruff/rules/#pygrep-hooks-pgh
+    "PIE",   # https://docs.astral.sh/ruff/rules/#flake8-pie-pie
+    "PLC",   # https://docs.astral.sh/ruff/rules/#convention-plc
+    "PLE",   # https://docs.astral.sh/ruff/rules/#error-ple
+    "PLW",   # https://docs.astral.sh/ruff/rules/#warning-plw
+    "PT",    # https://docs.astral.sh/ruff/rules/#flake8-pytest-style-pt
+    "PTH",   # https://docs.astral.sh/ruff/rules/#flake8-use-pathlib-pth
+    "PYI",   # https://docs.astral.sh/ruff/rules/#flake8-pyi-pyi
+    "RET",   # https://docs.astral.sh/ruff/rules/#flake8-return-ret
+    "RSE",   # https://docs.astral.sh/ruff/rules/#flake8-raise-rse
+    "RUF",   # https://docs.astral.sh/ruff/rules/#ruff-specific-rules-ruf
+    "SIM",   # https://docs.astral.sh/ruff/rules/#flake8-simplify-sim
+    "SLF",   # https://docs.astral.sh/ruff/rules/#flake8-self-slf
+    "T10",   # https://docs.astral.sh/ruff/rules/#flake8-debugger-t10
+    "T20",   # https://docs.astral.sh/ruff/rules/#flake8-print-t20
+    "TID",   # https://docs.astral.sh/ruff/rules/#flake8-tidy-imports-tid
+    "UP",    # https://docs.astral.sh/ruff/rules/#pyupgrade-up
+    "W",     # https://docs.astral.sh/ruff/rules/#warning-w
+]
+
+ignore = [
+    "E501",  # line length: formatter owns this
+    "N818",  # exception names are deliberately descriptive (ReviewChanged), not Error-suffixed
+    "F403",  # star imports, used for counterweight's style utilities
+    "F405",  # star imports, used for counterweight's style utilities
+    # pydocstyle: enforce well-formed docstrings, but don't mandate their presence or dictate mood.
+    "D1",    # undocumented-*: a presence check rewards padding
+    "D203",  # incompatible with D211 (no blank line before a class docstring)
+    "D205",  # would force a single-physical-line summary; summary sentences wrap naturally over a few lines
+    "D212",  # the multi-line summary belongs on the second line
+    "D401",  # non-imperative-mood: descriptive docstrings are fine ("Whether ...", "The rows of ...")
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "counterweight.styles.Style",
+    "counterweight.styles.styles.Style",
+    "counterweight.styles.utilities.*",
+    "counterweight.controls.Quit",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/assess_diff/", "tests/"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+skip_empty = true
+sort = "-cover"
+# Checked only where `--cov` is passed (`just test` with no arguments), never in `addopts`:
+# mutmut runs pytest itself against a copy of the source that `source` doesn't name,
+# so a gate there would fail mutmut's baseline.
+fail_under = 100
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "@overload",
+    "assert_never\\(",
+    "case _ as unreachable:",
+    "raise AssertionError",
+]
+
+[tool.mutmut]
+source_paths = ["src"]
+pytest_add_cli_args_test_selection = ["tests/"]
+# The type checker proves these lines unreachable, so every mutant of them survives.
+do_not_mutate_patterns = ["assert_never\\("]

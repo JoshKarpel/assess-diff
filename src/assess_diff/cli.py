@@ -1,0 +1,214 @@
+"""
+The `assess-diff` command: the shell that finds the repository, opens or starts a review, and runs the app,
+plus the commands that list, print and delete reviews without it.
+"""
+
+from __future__ import annotations
+
+import sys
+import uuid
+from collections.abc import AsyncIterator
+from collections.abc import Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
+from pathlib import Path
+
+from counterweight.app import app
+from without_cli import PATH
+from without_cli import STR
+from without_cli import FromEnv
+from without_cli import Streams
+from without_cli import argument
+from without_cli import command
+from without_cli import flag
+from without_cli import group
+from without_cli import once
+from without_cli import option
+from without_cli import optional
+from without_cli import run
+
+from assess_diff.diff import BaseMode
+from assess_diff.export import to_markdown
+from assess_diff.git import GitError
+from assess_diff.git import Repository
+from assess_diff.git import compute_diff
+from assess_diff.git import default_branch
+from assess_diff.git import find_repository
+from assess_diff.git import resolve_base
+from assess_diff.preferences import PreferencesFile
+from assess_diff.preferences import preferences_path
+from assess_diff.review import Review
+from assess_diff.review import UnreadableReview
+from assess_diff.storage import NoSuchReview
+from assess_diff.storage import OpenReview
+from assess_diff.storage import ReviewStore
+from assess_diff.storage import Stored
+from assess_diff.storage import for_project
+from assess_diff.storage import reviews_directory
+from assess_diff.ui.app import assess_app
+
+COMMANDS = ("review", "list", "show", "delete")
+ANSWERED = ("-h", "--help", "--version")
+
+
+@dataclass(frozen=True, slots=True)
+class Workspace:
+    """What every command works with: where to write, where reviews are, and where preferences are."""
+
+    streams: Streams
+    store: ReviewStore
+    preferences: PreferencesFile
+
+
+@asynccontextmanager
+async def workspace(streams: Streams, data_home: Path | None, config_home: Path | None) -> AsyncIterator[Workspace]:
+    yield Workspace(
+        streams=streams,
+        store=ReviewStore(reviews_directory(data_home)),
+        preferences=PreferencesFile(preferences_path(config_home)),
+    )
+
+
+def new_id() -> str:
+    """A review id: a UUIDv7, so ids sort by when their reviews started."""
+    return uuid.uuid7().hex
+
+
+def now() -> datetime:
+    return datetime.now(UTC)
+
+
+async def target_branch(repository: Repository, base: str | None) -> str | None:
+    """The branch to take the merge base with: `base` if given, else the default branch, or `None` if there's none."""
+    if base is not None:
+        return base
+    try:
+        return await default_branch(repository)
+    except GitError:
+        return None
+
+
+def latest(store: ReviewStore, repository: Repository) -> Stored | None:
+    """The current worktree's most recently updated review, if it has one."""
+    mine = for_project(store.reviews(), repository.common_dir, repository.worktree)
+    found = next((review for review in mine if review.worktree == repository.worktree), None)
+    return None if found is None else store.load(found.id)
+
+
+@command(
+    "review",
+    flag("--new", summary="Start a new review, rather than resuming this worktree's latest."),
+    option("--review", optional(STR), summary="Open the review with this id (or the start of it)."),
+    option("--base", optional(STR), summary="The branch to take the merge base with, if not the default branch."),
+)
+async def review_command(workspace: Workspace, new: bool, review_id: str | None, base: str | None) -> int:
+    """Review this worktree's changes (the default command)."""
+    repository = await find_repository(Path.cwd())
+    target = await target_branch(repository, base)
+    stored = (
+        workspace.store.find(review_id)
+        if review_id is not None
+        else None
+        if new
+        else latest(workspace.store, repository)
+    )
+    if stored is None:
+        mode = BaseMode.MERGE_BASE if target is not None else BaseMode.HEAD
+        review = Review.start(new_id(), repository.common_dir, repository.worktree, repository.branch, mode, now())
+        open_review = OpenReview(workspace.store, review, None, new_id, now)
+    else:
+        open_review = OpenReview(workspace.store, stored.review, stored.digest, new_id, now)
+    # The streams are read here, not bound as `app`'s defaults are, so a test can give it a pseudo-terminal.
+    await app(
+        assess_app(repository, target, open_review, workspace.preferences, workspace.preferences.load()),
+        input_stream=sys.stdin,
+        output_stream=sys.stdout,
+        title="assess-diff",
+    )
+    saved = open_review.review
+    if open_review.digest is None:
+        workspace.streams.stdout.write("Nothing was written, so no review was saved.\n")
+    else:
+        workspace.streams.stdout.write(
+            f"Saved review “{saved.name}” ({saved.id[:12]}); `assess-diff show` prints it.\n"
+        )
+    return 0
+
+
+@command("list")
+async def list_command(workspace: Workspace) -> int:
+    """List this repository's reviews, this worktree's first, each most recently updated first."""
+    repository = await find_repository(Path.cwd())
+    for review in for_project(workspace.store.reviews(), repository.common_dir, repository.worktree):
+        here = "*" if review.worktree == repository.worktree else " "
+        updated = review.updated.astimezone().strftime("%Y-%m-%d %H:%M")
+        comments = f"{len(review.comments)} comment" + ("" if len(review.comments) == 1 else "s")
+        workspace.streams.stdout.write(
+            f"{here} {review.id[:12]}  {review.name}  {review.branch or 'detached HEAD'}  {comments}"
+            f"  updated {updated}  {review.worktree}\n"
+        )
+    return 0
+
+
+@command("show", argument("id", optional(STR), summary="The review's id, or the start of it."))
+async def show_command(workspace: Workspace, review_id: str | None) -> int:
+    """Print a review as Markdown: this worktree's latest, unless an id is given."""
+    repository = await find_repository(Path.cwd())
+    stored = workspace.store.find(review_id) if review_id is not None else latest(workspace.store, repository)
+    if stored is None:
+        workspace.streams.stderr.write("This worktree has no reviews yet; `assess-diff` starts one.\n")
+        return 1
+    review = stored.review
+    target = await target_branch(repository, None)
+    mode = review.base_mode if target is not None else BaseMode.HEAD
+    diff = await compute_diff(repository, await resolve_base(repository, mode, target or "HEAD"))
+    workspace.streams.stdout.write(to_markdown(review, diff))
+    return 0
+
+
+@command("delete", argument("id", once(STR), summary="The review's id, or the start of it."))
+async def delete_command(workspace: Workspace, review_id: str) -> int:
+    """Delete a review."""
+    stored = workspace.store.find(review_id)
+    workspace.store.delete(stored.review.id)
+    workspace.streams.stdout.write(f"Deleted review {stored.review.id}\n")
+    return 0
+
+
+cli = group(
+    "assess-diff",
+    option("--data-home", optional(PATH), sources=(FromEnv("XDG_DATA_HOME"),), summary="Where reviews are kept."),
+    option(
+        "--config-home", optional(PATH), sources=(FromEnv("XDG_CONFIG_HOME"),), summary="Where preferences are kept."
+    ),
+    state=workspace,
+    commands=(review_command, list_command, show_command, delete_command),
+    summary="Review an agent's working-tree diff in the terminal, and hand the review back as Markdown.",
+)
+
+
+def with_default_command(argv: Sequence[str]) -> list[str]:
+    """
+    `argv` with `review` put in front of the first argument that isn't one of the group's own options,
+    when no command is named, so a bare `assess-diff` (or `assess-diff --new`) opens the app.
+    """
+    arguments = list(argv)
+    index = 0
+    while index < len(arguments) and arguments[index] in ("--data-home", "--config-home"):
+        index += 2
+    rest = arguments[index:]
+    if rest and (rest[0] in COMMANDS or rest[0] in ANSWERED):
+        return arguments
+    return [*arguments[:index], "review", *rest]
+
+
+def main() -> None:
+    """The `assess-diff` console script."""
+    try:
+        code = run(cli, argv=with_default_command(sys.argv[1:]))
+    except (GitError, NoSuchReview, UnreadableReview) as error:
+        sys.stderr.write(f"assess-diff: {error}\n")
+        code = 1
+    raise SystemExit(code)
