@@ -237,6 +237,14 @@ def test_review_in_a_repository_without_a_default_branch_still_opens(
     assert invoke()[0] == 0
 
 
+def test_review_against_a_base_git_cant_resolve_still_opens(
+    project: ReviewStore, scratch: Scratch, terminal: Terminal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    quit_at_once(terminal, monkeypatch)
+
+    assert invoke("review", "--base", "no-such-branch")[0] == 0
+
+
 def test_main_reports_an_unreadable_review(
     project: ReviewStore, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

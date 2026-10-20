@@ -38,6 +38,11 @@ profile WORKLOAD="large/down":
     uv run python -m profiling.sampling run --mode cpu --binary -o profiles/{{ replace(WORKLOAD, "/", "-") }}.bin -m benchmarks.keys --only {{ WORKLOAD }} --repeat 1
     uv run python -m profiling.sampling replay --flamegraph -o profiles/{{ replace(WORKLOAD, "/", "-") }}.html profiles/{{ replace(WORKLOAD, "/", "-") }}.bin
 
+[doc("Record the README's demo as demo/demo.cast, and draw it as demo/demo.gif if it changed (--redraw to draw anyway)")]
+[positional-arguments]
+demo *ARGS:
+    uv run python -m demo.record "$@"
+
 [doc('Upgrade all dependencies, and the tools in mise.toml')]
 upgrade:
     uv lock --upgrade

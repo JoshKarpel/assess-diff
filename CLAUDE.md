@@ -29,6 +29,7 @@ just test      # mypy, then pytest with the coverage gate
 just mutate    # mutmut, or `just mutate 'assess_diff.diff.*'` to re-run some mutants
 just bench     # per-key latency on generated diffs, or `just bench --only large/down` for one workload
 just profile large/down  # that workload under the sampling profiler, with a flamegraph in profiles/
+just demo      # record the README's demo as demo/demo.cast, drawing demo/demo.gif with agg if it changed
 just pre-commit
 ```
 

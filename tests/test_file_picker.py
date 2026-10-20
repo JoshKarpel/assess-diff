@@ -38,7 +38,7 @@ def test_file_entry_shows_how_many_comments_a_file_has() -> None:
     assert file_entry(CHANGED, "b.py", 3) == (
         STATUS,
         Chunk(content="b.py"),
-        Chunk(content=" #3", style=text_color("slate", 500)),
+        Chunk(content=" ●3", style=text_color("amber", 400)),
     )
 
 

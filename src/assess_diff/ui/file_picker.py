@@ -123,7 +123,8 @@ def file_entry(file: FileDiff, label: str, comments: int) -> tuple[Chunk, ...]:
     return (
         Chunk(content=f"{STATUS_LETTERS[file.status]} ", style=STATUS_COLORS[file.status]),
         Chunk(content=label),
-        *((Chunk(content=f" #{comments}", style=text_color("slate", 500)),) if comments else ()),
+        # A dot in the comments' amber, rather than `#`, which names a single comment by its number.
+        *((Chunk(content=f" ●{comments}", style=text_color("amber", 400)),) if comments else ()),
     )
 
 

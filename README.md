@@ -11,6 +11,8 @@ and the lines it was about where they've changed since.
 Reviews are saved as you type, under `$XDG_DATA_HOME/assess-diff/`,
 and belong to the repository, across its worktrees.
 
+![Commenting on a range of lines and a whole file, going to a comment by its number, the split view, choosing a syntax theme, writing the summary, and copying the review](https://raw.githubusercontent.com/JoshKarpel/assess-diff/main/demo/demo.gif)
+
 It's built on [counterweight](https://www.counterweight.dev/).
 
 ## Running it

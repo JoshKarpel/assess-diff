@@ -43,7 +43,12 @@ async def test_c_copies_the_review_as_markdown(scratch: Scratch, terminal: Termi
 
     await app(
         assess_app(
-            repository, "main", open_review, PreferencesFile(tmp_path / "preferences.json"), Preferences.defaults()
+            repository,
+            "main",
+            open_review,
+            PreferencesFile(tmp_path / "preferences.json"),
+            Preferences.defaults(),
+            None,
         ),
         output_stream=output,
         input_stream=terminal.stream,

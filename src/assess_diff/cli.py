@@ -30,6 +30,7 @@ from without_cli import optional
 from without_cli import run
 
 from assess_diff.diff import BaseMode
+from assess_diff.diff import Diff
 from assess_diff.export import to_markdown
 from assess_diff.git import GitError
 from assess_diff.git import Repository
@@ -104,6 +105,12 @@ def latest(store: ReviewStore, repository: Repository) -> Stored | None:
     return None if found is None else store.load(found.id)
 
 
+async def current_diff(repository: Repository, review: Review, target: str | None) -> Diff:
+    """The diff `review` reads against: the merge base with `target` if it was last viewed that way, else `HEAD`."""
+    mode = review.base_mode if target is not None else BaseMode.HEAD
+    return await compute_diff(repository, await resolve_base(repository, mode, target or "HEAD"))
+
+
 def starting_base(base: str | None) -> BaseMode:
     """What a new review is against: the change since the last commit, unless `--base` named a branch to take the merge base with."""
     return BaseMode.MERGE_BASE if base is not None else BaseMode.HEAD
@@ -132,9 +139,14 @@ async def review_command(workspace: Workspace, new: bool, review_id: str | None,
         open_review = OpenReview(workspace.store, review, None, new_id, now)
     else:
         open_review = OpenReview(workspace.store, stored.review, stored.digest, new_id, now)
+    try:
+        diff = await current_diff(repository, open_review.review, target)
+    except GitError:
+        # The app computes it again as it starts, and shows the failure where `b` can switch to a base that works.
+        diff = None
     # The streams are read here, not bound as `app`'s defaults are, so a test can give it a pseudo-terminal.
     await app(
-        assess_app(repository, target, open_review, workspace.preferences, workspace.preferences.load()),
+        assess_app(repository, target, open_review, workspace.preferences, workspace.preferences.load(), diff),
         input_stream=sys.stdin,
         output_stream=sys.stdout,
         title="assess-diff",
@@ -172,11 +184,8 @@ async def show_command(workspace: Workspace, review_id: str | None) -> int:
     if stored is None:
         workspace.streams.stderr.write("This worktree has no reviews yet; `assess-diff` starts one.\n")
         return 1
-    review = stored.review
-    target = await target_branch(repository, None)
-    mode = review.base_mode if target is not None else BaseMode.HEAD
-    diff = await compute_diff(repository, await resolve_base(repository, mode, target or "HEAD"))
-    workspace.streams.stdout.write(to_markdown(review, diff))
+    diff = await current_diff(repository, stored.review, await target_branch(repository, None))
+    workspace.streams.stdout.write(to_markdown(stored.review, diff))
     return 0
 
 

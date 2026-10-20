@@ -81,6 +81,8 @@ from assess_diff.review import is_outdated
 from assess_diff.review import rename
 from assess_diff.storage import OpenReview
 from assess_diff.storage import for_project
+from assess_diff.ui.comment_jump import comment_jump
+from assess_diff.ui.comment_jump import wanted
 from assess_diff.ui.diff_view import Actions
 from assess_diff.ui.diff_view import diff_pane
 from assess_diff.ui.diff_view import summary_dialog
@@ -111,6 +113,15 @@ class Session:
     picking_theme: PickingTheme | None
     managing: Managing | None
     naming: Naming | None
+    jumping: Jumping | None
+
+
+@dataclass(frozen=True, slots=True)
+class Jumping:
+    """The dialog to go to a comment by its number is open: its field's focus handle, and the digits typed so far."""
+
+    handle: FocusHandle
+    number: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +156,7 @@ INITIAL_SESSION = Session(
     picking_theme=None,
     managing=None,
     naming=None,
+    jumping=None,
 )
 
 
@@ -243,6 +255,8 @@ def key_hints(session: Session, are_keys_shown: bool) -> tuple[str, ...]:
     """
     if session.naming is not None:
         return ("enter rename", "esc keep the old name")
+    if session.jumping is not None:
+        return ("type a number", "enter go", "esc close")
     if session.managing is not None:
         return ("↑↓ choose", "enter open", "e rename", "dd delete", "esc close")
     if session.picking_theme is not None:
@@ -258,6 +272,7 @@ def key_hints(session: Session, are_keys_shown: bool) -> tuple[str, ...]:
         "⇧↑↓ select",
         "tab hunk/comment",
         "n/N comment",
+        "# go to #",
         "enter comment",
         "dd delete",
         "r summary",
@@ -281,17 +296,20 @@ def assess_app(
     open_review: OpenReview,
     preferences_file: PreferencesFile,
     initial_preferences: Preferences,
+    initial_diff: Diff | None,
 ) -> Div:
     """
     The whole app. `target` is the branch the merge base is taken with,
     or `None` when there isn't one, which leaves the base at `HEAD`.
+    `initial_diff` is drawn until the app computes the diff itself, as it starts watching;
+    the CLI computes it before the app starts, so the first frame draws it,
+    and it's `None` only when that failed, which draws a line saying it's being read.
     """
     review, set_review = use_state(open_review.review)
     preferences, set_preferences = use_state(initial_preferences)
-    no_diff: Diff | None = None
     no_notice: str | None = None
     base_mode, set_base_mode = use_state(review.base_mode if target is not None else BaseMode.HEAD)
-    diff, set_diff = use_state(no_diff)
+    diff, set_diff = use_state(initial_diff)
     session, set_session = use_state(INITIAL_SESSION)
     # Apart from the session, so they stay as they are when another review opens.
     are_files_shown, set_files_shown = use_state(True)
@@ -581,9 +599,30 @@ def assess_app(
         set_session(lambda s: replace(s, naming=None))
         return FocusOn(diff_focus)
 
+    def start_jumping() -> InputResponse:
+        """Open the dialog to go to a comment by its number, carrying on with what's typed if it's already open."""
+        jumping = session.jumping or Jumping(FocusHandle(), "")
+        set_session(lambda s: replace(s, jumping=jumping))
+        return FocusOn(jumping.handle)
+
+    def set_jump_number(edit: Callable[[str], str]) -> None:
+        set_session(
+            lambda s: s if s.jumping is None else replace(s, jumping=replace(s.jumping, number=edit(s.jumping.number)))
+        )
+
+    def go_to_comment(number: int) -> InputResponse:
+        set_session(
+            lambda s: replace(s, cursor=CommentAt(number), selection=None, confirming_delete=None, jumping=None)
+        )
+        return FocusOn(diff_focus), ScrollIntoView(cursor_element, block="center")
+
+    def cancel_jumping() -> InputResponse:
+        set_session(lambda s: replace(s, jumping=None))
+        return FocusOn(diff_focus)
+
     def return_to_diff() -> InputResponse:
         """Focus the diff, closing any dialog and finishing any edit on the way, so nothing is left open unfocused."""
-        set_session(lambda s: replace(s, picking_theme=None, managing=None, naming=None))
+        set_session(lambda s: replace(s, picking_theme=None, managing=None, naming=None, jumping=None))
         if session.editing is not None:
             return finish_editing()
         return FocusOn(diff_focus)
@@ -626,6 +665,8 @@ def assess_app(
                 return FocusOn(handle)
             case KeyPressed(key="e"):
                 return start_naming()
+            case KeyPressed(key="#"):
+                return start_jumping()
             case KeyPressed(key="f"):
                 set_files_shown(True)
                 return FocusOn(picker_focus)
@@ -720,6 +761,20 @@ def assess_app(
             *(
                 (theme_picker(themes(), picking.query, set_query, picking.handle, choose_theme, cancel_theme),)
                 if picking is not None
+                else ()
+            ),
+            *(
+                (
+                    comment_jump(
+                        session.jumping.number,
+                        set_jump_number,
+                        session.jumping.handle,
+                        wanted(session.jumping.number, review),
+                        go_to_comment,
+                        cancel_jumping,
+                    ),
+                )
+                if session.jumping is not None
                 else ()
             ),
             *(

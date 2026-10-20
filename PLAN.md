@@ -197,6 +197,10 @@ which re-renders only if the result differs.
 The watcher still receives events from ignored directories (a `.venv`, `node_modules`) and discards them per batch;
 excluding them from the watch itself would mean re-deriving git's ignore rules, which is what this avoids.
 
+The CLI computes the first diff before the app starts, so the first frame draws it rather than a line saying it's being read.
+The effect still computes it as it starts watching, so a change made in between isn't missed;
+a git failure in the first computation leaves the app to compute it again and show the failure, where `b` can change the base.
+
 ### Comment anchors
 
 A comment anchors to a path, a side (`old` or `new`), and a line range on that side,
@@ -221,6 +225,9 @@ Re-anchoring by searching for the excerpt is [later](#later).
 Comments are numbered in creation order, and the number is shown in the UI,
 so one comment can refer to another as `#3`.
 Numbers are never reused, so deleting one doesn't change what `#3` means.
+`#` opens a dialog over the diff to follow such a reference:
+it takes only digits, shows where the comment the number names is and the first line of what it says
+(or that no comment has that number), and Enter or a click on it moves the cursor there.
 
 ### Navigation: one cursor, Tab jumps it between stops
 
@@ -268,6 +275,20 @@ A click maps to a row through the receiver's relative position.
 
 `just bench` times how long each kind of key takes to answer on generated diffs of 2,000 to 40,000 lines,
 and `just profile` runs one of those workloads under the sampling profiler.
+
+The README's demo is recorded, not captured by hand:
+`just demo` drives the app headless through a scripted walkthrough on a small repository it builds,
+records it as an asciicast with counterweight's `Recording`, and draws it as a GIF with [agg](https://github.com/asciinema/agg).
+It comes out the same on every run:
+the repository's commits have fixed dates and git reads no configuration but the repository's own,
+the review's clock and id are fixed,
+the app runs on a `FrozenClock` that only the walkthrough's pauses move,
+and the diff is computed before the app starts, so nothing waits on git in real time.
+The asciicast is committed beside the GIF, and a pre-commit hook records it again
+whenever the app's source, the demo, or the lock changes, so the demo can't fall out of date.
+The GIF is drawn again only when the asciicast changes:
+agg draws with the fonts each machine has, so its bytes differ between machines where the asciicast's don't,
+and CI, on Linux and macOS, can check the demo is current without drawing anything.
 
 Split view pairs each hunk's removed and added lines side by side, as GitHub does,
 with context lines on both sides, and cuts lines too long for their half with `…`.
@@ -329,6 +350,7 @@ which works where the terminal supports it, and tmux passes it on only with `set
 | Home, End                   | Move the cursor to the summary or the last line                 |
 | Tab, Shift+Tab              | Next or previous hunk or comment                                |
 | `n`, `N`                    | Next or previous comment                                        |
+| `#`, a number, Enter        | Go to that comment                                              |
 | Enter                       | Comment on the selection or, on a header, the whole file; or edit the comment under the cursor |
 | Escape                      | Finish editing (an empty comment is discarded), or clear the selection |
 | `d`, `d`                    | Delete the comment under the cursor (pressed twice, to confirm) |

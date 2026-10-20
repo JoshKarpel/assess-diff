@@ -22,6 +22,7 @@ from counterweight.geometry import Position
 from counterweight.output import Frame
 
 from assess_diff.diff import BaseMode
+from assess_diff.diff import Diff
 from assess_diff.git import find_repository
 from assess_diff.preferences import PreferencesFile
 from assess_diff.review import Review
@@ -91,8 +92,12 @@ class Harness:
         loaded: str = "against ",
         quit_with: AutopilotStep = Quit(),
         open_review: Callable[[OpenReview], OpenReview] = lambda opened: opened,
+        initial_diff: Diff | None = None,
     ) -> OpenReview:
-        """Runs the app until the diff shows `loaded`, then takes `steps`, then quits; returns the open review."""
+        """
+        Runs the app, given `initial_diff` to draw until it computes its own, until the diff shows `loaded`,
+        then takes `steps`, then quits; returns the open review.
+        """
         repository = await find_repository(self.scratch.root)
         stored = self.store.path(REVIEW_ID)
         if stored.exists():
@@ -105,7 +110,7 @@ class Harness:
             opened = OpenReview(self.store, started, None, lambda: "forked", lambda: CLOCK)
         opened = open_review(opened)
         await app(
-            assess_app(repository, target, opened, self.preferences, self.preferences.load()),
+            assess_app(repository, target, opened, self.preferences, self.preferences.load(), initial_diff),
             headless=True,
             dimensions=(WIDTH, HEIGHT),
             autopilot=[showing(loaded), *steps, quit_with],

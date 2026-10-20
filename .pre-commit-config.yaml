@@ -8,6 +8,8 @@ repos:
         name: check for added large files
         entry: uv run --frozen check-added-large-files
         language: unsupported
+        # `just demo` draws it, and every frame of typing makes it about a megabyte.
+        exclude: ^demo/demo\.gif$
       - id: check-case-conflict
         name: check for case conflicts
         entry: uv run --frozen check-case-conflict
@@ -116,4 +118,15 @@ repos:
         entry: uv lock
         language: unsupported
         files: ^(uv\.lock|pyproject\.toml|uv\.toml)$
+        pass_filenames: false
+
+  # Last, so it records with the source as the hooks above left it.
+  # `mise exec` puts agg on `PATH` whether or not the shell that ran `git commit` activated mise.
+  - repo: local
+    hooks:
+      - id: demo
+        name: record the README's demo
+        entry: mise exec -- uv run --frozen python -m demo.record
+        language: unsupported
+        files: ^(src/assess_diff/|demo/|uv\.lock$)
         pass_filenames: false

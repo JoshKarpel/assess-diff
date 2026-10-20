@@ -20,6 +20,9 @@ from assess_diff.diff import Diff
 from assess_diff.diff import LineKind
 from assess_diff.diff import Side
 from assess_diff.export import to_markdown
+from assess_diff.git import compute_diff
+from assess_diff.git import find_repository
+from assess_diff.git import resolve_base
 from assess_diff.navigation import ViewMode
 from assess_diff.navigation import build_document
 from assess_diff.preferences import PreferencesFile
@@ -33,6 +36,7 @@ from assess_diff.review import edit_summary
 from assess_diff.storage import OpenReview
 from assess_diff.storage import ReviewStore
 from assess_diff.ui.app import INITIAL_SESSION
+from assess_diff.ui.app import Jumping
 from assess_diff.ui.app import Managing
 from assess_diff.ui.app import Naming
 from assess_diff.ui.app import PickingTheme
@@ -90,6 +94,16 @@ def lines(comment: Comment) -> NewAnchor | OldAnchor:
     return comment.anchor
 
 
+async def test_a_diff_computed_already_is_drawn_in_the_first_frame(harness: Harness) -> None:
+    repository = await find_repository(harness.scratch.root)
+    computed = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "HEAD"))
+
+    await harness.run([harness.shot()], loaded="", initial_diff=computed)
+
+    assert "return 6" in harness.frames[0]
+    assert "reading the diff" not in harness.frames[0]
+
+
 async def test_tab_reaches_the_first_hunk_and_enter_comments_on_it(harness: Harness) -> None:
     await harness.run([TAB, ENTER, *typed("why six?"), ESCAPE])
 
@@ -143,6 +157,65 @@ async def test_n_and_shift_n_jump_between_comments(harness: Harness) -> None:
     )
 
     assert [(c.number, lines(c).start, c.body) for c in harness.review().comments] == [(1, 11, "one!"), (2, 41, "two")]
+
+
+TWO_COMMENTS = [*(TAB, ENTER, *typed("one"), ESCAPE), *(TAB, ENTER, *typed("two\nmore"), ESCAPE), *keys(Key.Home)]
+"""Comment #1 on removed line 11 and #2 on removed line 41, with the cursor back on the summary."""
+
+
+async def test_hash_then_a_number_and_enter_goes_to_that_comment(harness: Harness) -> None:
+    await harness.run([*TWO_COMMENTS, *keys("#"), *typed("1"), ENTER, harness.shot(), ENTER, *typed("!"), ESCAPE])
+
+    assert [c.body for c in harness.review().comments] == ["one!", "two\nmore"]
+    assert "Go to comment" not in harness.frames[0]
+
+
+async def test_go_to_comment_previews_the_comment_the_number_names(harness: Harness) -> None:
+    await harness.run([*TWO_COMMENTS, *keys("#"), harness.shot(), *typed("2"), harness.shot()])
+
+    assert "Type a comment's number" in harness.frames[0]
+    assert "#2 app.py, removed line 41" in harness.frames[1]
+    assert "two" in harness.frames[1].split("#2 app.py, removed line 41")[1]
+    assert "more" not in harness.frames[1].split("#2 app.py, removed line 41")[1]
+
+
+async def test_go_to_comment_says_when_no_comment_has_the_number_and_enter_stays(harness: Harness) -> None:
+    await harness.run([*TWO_COMMENTS, *keys("#"), *typed("9"), ENTER, harness.shot(), ESCAPE, ENTER, *typed("s")])
+
+    assert "No comment #9" in harness.frames[0]
+    assert harness.review().summary == "s"
+
+
+async def test_go_to_comment_takes_only_digits_and_keeps_keys_from_the_app(harness: Harness) -> None:
+    await harness.run([*keys("#"), *typed("q#1x"), harness.shot()])
+
+    assert "No comment #1" in harness.frames[0]
+
+
+@pytest.mark.parametrize("leave", [ESCAPE, TAB], ids=["escape", "tab"])
+async def test_leaving_go_to_comment_closes_it_where_the_cursor_was(harness: Harness, leave: KeyPressed) -> None:
+    await harness.run([*TWO_COMMENTS, *keys("#"), *typed("2"), leave, harness.shot(), ENTER, *typed("s")])
+
+    assert "Go to comment" not in harness.frames[0]
+    assert harness.review().summary == "s"
+
+
+async def test_clicking_the_previewed_comment_goes_to_it(harness: Harness) -> None:
+    await harness.run([*TWO_COMMENTS, *keys("#"), *typed("2"), harness.shot()])
+    previewed = where(harness.frames[0], "#2 app.py, removed line 41")
+
+    await harness.run([*keys("#"), *typed("2"), *click(previewed.x, previewed.y), ENTER, *typed("!"), ESCAPE])
+
+    assert [c.body for c in harness.review().comments] == ["one", "two\nmore!"]
+
+
+async def test_hash_with_go_to_comment_left_open_carries_on_with_what_was_typed(harness: Harness) -> None:
+    await harness.run([*TWO_COMMENTS, harness.shot()])
+    row = where(harness.frames[0], "def f0():")
+
+    await harness.run([*keys("#"), *typed("1"), *click(row.x, row.y), *keys("#"), ENTER, ENTER, *typed("!"), ESCAPE])
+
+    assert [c.body for c in harness.review().comments] == ["one!", "two\nmore"]
 
 
 async def test_shift_tab_goes_back_to_the_previous_stop(harness: Harness) -> None:
@@ -716,6 +789,7 @@ def test_key_hints_list_the_diffs_keys() -> None:
         "⇧↑↓ select",
         "tab hunk/comment",
         "n/N comment",
+        "# go to #",
         "enter comment",
         "dd delete",
         "r summary",
@@ -740,6 +814,7 @@ def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
     ("session", "hints"),
     [
         (replace(INITIAL_SESSION, naming=Naming(HANDLE, "draft")), ("enter rename", "esc keep the old name")),
+        (replace(INITIAL_SESSION, jumping=Jumping(HANDLE, "4")), ("type a number", "enter go", "esc close")),
         (
             replace(INITIAL_SESSION, managing=Managing(HANDLE, ())),
             ("↑↓ choose", "enter open", "e rename", "dd delete", "esc close"),
@@ -757,7 +832,7 @@ def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
             ("press d again to delete #7", "anything else to keep it"),
         ),
     ],
-    ids=["naming", "managing", "picking-theme", "editing", "confirming-delete"],
+    ids=["naming", "jumping", "managing", "picking-theme", "editing", "confirming-delete"],
 )
 def test_key_hints_list_the_keys_of_what_has_focus_even_folded(session: Session, hints: tuple[str, ...]) -> None:
     assert key_hints(session, False) == hints
