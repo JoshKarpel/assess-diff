@@ -27,8 +27,13 @@ mise install   # just, uv
 uv sync
 just test      # mypy, then pytest with the coverage gate
 just mutate    # mutmut, or `just mutate 'assess_diff.diff.*'` to re-run some mutants
+just bench     # per-key latency on generated diffs, or `just bench --only large/down` for one workload
+just profile large/down  # that workload under the sampling profiler, with a flamegraph in profiles/
 just pre-commit
 ```
+
+A performance claim needs `just bench` numbers from before and after the change, from the same machine.
+The benchmarks in `benchmarks/` sit outside the coverage gate, and reuse the tests' harness.
 
 Line and branch coverage of `src/assess_diff` and `tests` is held at 100% (`fail_under` in `pyproject.toml`),
 so new code comes with the tests that run it, UI code included (driven headless through counterweight's autopilot).

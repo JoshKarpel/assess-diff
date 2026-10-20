@@ -25,6 +25,7 @@ from tests.builders import comment
 from tests.builders import diff_of
 from tests.builders import review
 from tests.conftest import Scratch
+from tests.harness import HEIGHT
 from tests.harness import REVIEW_ID
 from tests.harness import Harness
 from tests.harness import click
@@ -224,6 +225,83 @@ async def test_theme_picker_escape_reverts_and_saves_nothing(harness: Harness) -
     assert not harness.preferences.path.exists()
 
 
+async def test_tab_out_of_the_theme_picker_closes_it_and_reverts(harness: Harness) -> None:
+    await harness.run([harness.shot(), *keys("t", Key.Down), harness.shot(), TAB, harness.shot()])
+
+    assert "Syntax theme" in harness.frames[1]
+    assert "Syntax theme" not in harness.frames[2]
+    assert code_row(harness, 2) == code_row(harness, 0)
+    assert not harness.preferences.path.exists()
+
+
+async def test_tab_out_of_the_summary_dialog_closes_it_and_keeps_the_summary(harness: Harness) -> None:
+    await harness.run([*keys("r"), *typed("tabbed"), TAB, harness.shot()])
+
+    assert harness.review().summary == "tabbed"
+    assert "esc done" not in harness.frames[0]
+
+
+async def test_tab_out_of_a_comment_finishes_editing_it(harness: Harness) -> None:
+    await harness.run([TAB, ENTER, *typed("tabbed"), TAB, harness.shot()])
+
+    assert [c.body for c in harness.review().comments] == ["tabbed"]
+    assert "esc done" not in harness.frames[0]
+
+
+async def test_clicking_the_summary_while_editing_it_keeps_editing(harness: Harness) -> None:
+    await harness.run([harness.shot()])
+    summary = where(harness.frames[0], "Review summary")
+
+    await harness.run([*click(summary.x, summary.y), *click(summary.x, summary.y), *typed("kept"), ESCAPE])
+
+    assert harness.review().summary == "kept"
+
+
+async def test_t_with_the_theme_picker_left_open_returns_to_it(harness: Harness) -> None:
+    await harness.run([harness.shot()])
+    row = where(harness.frames[0], "def f0():")
+
+    await harness.run([*keys("t"), *click(row.x, row.y), *keys("t"), *typed("monokai"), ENTER])
+
+    assert harness.preferences.load().theme == "monokai"
+
+
+ERASE_NAME = keys(*[Key.Backspace] * 20)
+"""Enough Backspaces to empty the field of a new review's name, which is when it started."""
+
+
+@pytest.mark.parametrize(("name", "kept"), [("  spaced  ", "spaced"), ("   ", "   ")])
+async def test_e_renames_the_review_from_the_status_line(harness: Harness, name: str, kept: str) -> None:
+    await harness.run([*keys("e"), *ERASE_NAME, *typed(name), ENTER, harness.shot()])
+
+    assert harness.review().name == kept
+    assert f" {kept} " in harness.frames[0].splitlines()[0]
+
+
+@pytest.mark.parametrize("leave", [ESCAPE, TAB], ids=["escape", "tab"])
+async def test_leaving_the_name_field_keeps_the_old_name(harness: Harness, leave: KeyPressed) -> None:
+    await harness.run([*keys("e"), *typed("zzz"), harness.shot(), leave, harness.shot()])
+
+    assert "zzz" in harness.frames[0].splitlines()[0]
+    assert "zzz" not in harness.frames[1]
+    assert not harness.store.path(REVIEW_ID).exists()
+
+
+async def test_clicking_the_name_in_the_status_line_edits_it(harness: Harness) -> None:
+    await harness.run([*click(len(" assess-diff ") + 1, 0), *ERASE_NAME, *typed("clicked"), ENTER])
+
+    assert harness.review().name == "clicked"
+
+
+async def test_e_with_the_name_field_left_open_carries_on_with_what_was_typed(harness: Harness) -> None:
+    await harness.run([harness.shot()])
+    row = where(harness.frames[0], "def f0():")
+
+    await harness.run([*keys("e"), *ERASE_NAME, *typed("draft"), *click(row.x, row.y), *keys("e"), *typed("!"), ENTER])
+
+    assert harness.review().name == "draft!"
+
+
 async def test_theme_picker_says_when_nothing_matches(harness: Harness) -> None:
     await harness.run([*keys("t"), *typed("zzzz"), harness.shot(), ENTER, ESCAPE])
 
@@ -316,11 +394,36 @@ async def test_page_and_end_keys_move_far(harness: Harness) -> None:
     assert harness.review().comments[0].anchor.start == 3
 
 
-async def test_page_down_moves_twenty_positions(harness: Harness) -> None:
-    # From the summary, past the header and nineteen rows, the removed line 11 among them.
+async def test_moving_down_from_the_top_of_a_scrolled_view_leaves_the_view_be(harness: Harness) -> None:
+    # Far enough down that the view scrolls, then back up past its top, so the cursor's row is the top one in view.
+    await harness.run(
+        [*keys(*[Key.Down] * 40, *[Key.Up] * 32), harness.shot(), *keys(Key.Down, Key.Down), harness.shot()]
+    )
+
+    assert harness.frames[1] == harness.frames[0]
+
+
+# Seven eighths of the pane, which is the screen less the status line and the key hints.
+PAGE = int((HEIGHT - 2) * 0.875)
+
+
+async def test_page_down_scrolls_the_view_by_seven_eighths_of_it(harness: Harness) -> None:
+    await harness.run([harness.shot(), *keys(Key.PageDown), harness.shot()])
+
+    assert where(harness.frames[0], " 20  20 ").y - where(harness.frames[1], " 20  20 ").y == PAGE
+
+
+async def test_page_up_scrolls_the_view_back_by_as_much(harness: Harness) -> None:
+    await harness.run([*keys(Key.PageDown), harness.shot(), *keys(Key.PageDown, Key.PageUp), harness.shot()])
+
+    assert harness.frames[1] == harness.frames[0]
+
+
+async def test_page_down_moves_the_cursor_as_far_as_the_view_scrolls(harness: Harness) -> None:
+    # From the summary, past the header and the rows, the removed line 11 among them.
     await harness.run([*keys(Key.PageDown), ENTER, *typed("x"), ESCAPE])
 
-    assert harness.review().comments[0].anchor.start == 18
+    assert harness.review().comments[0].anchor.start == PAGE - 2
 
 
 async def test_the_diff_follows_a_file_written_while_it_is_open(harness: Harness) -> None:
@@ -334,6 +437,53 @@ async def test_the_diff_follows_a_file_written_while_it_is_open(harness: Harness
     await harness.run([write, showing("later.py"), harness.shot()])
 
     assert "? later.py" in harness.frames[0]
+
+
+async def test_a_refresh_that_succeeds_clears_the_git_failure_and_no_other_notice(harness: Harness) -> None:
+    def make_the_branch(_: object) -> bool:
+        harness.scratch.git("branch", "--force", "no-such-branch")
+        harness.scratch.write("later.py", "appeared = True\n")
+        return True
+
+    recovered = WaitFor(lambda frame: "failed" not in frame.text(ansi=False), timeout=timedelta(seconds=10))
+    await harness.run(
+        [
+            *keys("b"),
+            showing("failed"),
+            *keys("c"),
+            showing("Copied"),
+            harness.shot(),
+            WaitFor(make_the_branch, timeout=timedelta(seconds=10)),
+            recovered,
+            harness.shot(),
+        ],
+        target="no-such-branch",
+    )
+
+    assert "git merge-base HEAD no-such-branch failed" in harness.frames[0]
+    assert "failed" not in harness.frames[1]
+    assert "Copied review" in harness.frames[1]
+
+
+async def test_a_selection_is_kept_within_its_file_when_the_file_shrinks(harness: Harness) -> None:
+    def shrink(_: object) -> bool:
+        harness.scratch.write("notes.md", "# Notes\n")
+        return True
+
+    await harness.run(
+        [
+            KeyPressed(key=Key.End),
+            *keys("K", "K"),
+            WaitFor(shrink, timeout=timedelta(seconds=10)),
+            showing("+1 -0"),
+            ENTER,
+            *typed("x"),
+            ESCAPE,
+        ]
+    )
+
+    (made,) = harness.review().comments
+    assert (made.anchor.path, made.anchor.start, made.anchor.end) == ("notes.md", 1, 1)
 
 
 async def test_up_moves_the_cursor_back(harness: Harness) -> None:

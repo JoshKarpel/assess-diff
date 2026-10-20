@@ -9,6 +9,7 @@ from watchfiles import Change
 
 from assess_diff.diff import BaseMode
 from assess_diff.diff import FileStatus
+from assess_diff.diff import LineKind
 from assess_diff.git import MAX_FILE_BYTES
 from assess_diff.git import GitError
 from assess_diff.git import changes_matter
@@ -180,6 +181,59 @@ def test_read_lines_of_a_file_removed_since_the_diff_says_so(tmp_path: Path) -> 
     assert read_lines(tmp_path / "gone") == "File removed while reading"
 
 
+def test_read_lines_of_a_directory_says_it_is_a_repository(tmp_path: Path) -> None:
+    assert read_lines(tmp_path) == "Submodule or nested repository"
+
+
+def add_submodule(scratch: Scratch, tmp_path: Path) -> Scratch:
+    """`scratch` with a submodule at `sub`, committed, and the submodule's own checkout to change it in."""
+    inner = init_scratch(tmp_path / "inner")
+    inner.commit()
+    scratch.git("-c", "protocol.file.allow=always", "submodule", "--quiet", "add", str(inner.root), "sub")
+    scratch.commit()
+    return init_scratch(scratch.root / "sub")
+
+
+async def test_a_moved_submodule_has_a_placeholder(scratch: Scratch, tmp_path: Path) -> None:
+    add_submodule(scratch, tmp_path).commit("moved")
+    repository = await find_repository(scratch.root)
+
+    (file,) = (await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))).files
+
+    assert (file.path, file.status, file.placeholder) == ("sub", FileStatus.MODIFIED, "Submodule or nested repository")
+
+
+async def test_an_untracked_nested_repository_has_a_placeholder(scratch: Scratch) -> None:
+    scratch.commit()
+    init_scratch(scratch.root / "nested").commit()
+    repository = await find_repository(scratch.root)
+
+    (file,) = (await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))).files
+
+    assert (file.path, file.status, file.placeholder) == (
+        "nested/",
+        FileStatus.UNTRACKED,
+        "Submodule or nested repository",
+    )
+
+
+async def test_diff_rows_ignore_a_textconv_driver(scratch: Scratch) -> None:
+    scratch.write(".gitattributes", "*.txt diff=headless\n")
+    scratch.git("config", "diff.headless.textconv", "sed 1d")
+    scratch.write("f.txt", "keep\nsame\n")
+    scratch.commit()
+    scratch.write("f.txt", "keep\nnew\n")
+    repository = await find_repository(scratch.root)
+
+    (file,) = (await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))).files
+
+    assert [(line.kind, line.text) for line in file.lines] == [
+        (LineKind.CONTEXT, "keep"),
+        (LineKind.REMOVED, "same"),
+        (LineKind.ADDED, "new"),
+    ]
+
+
 def test_read_lines_of_invalid_utf8_is_binary(tmp_path: Path) -> None:
     (tmp_path / "f").write_bytes(b"\xff\xfe")
 
@@ -194,6 +248,9 @@ def test_read_lines_of_invalid_utf8_is_binary(tmp_path: Path) -> None:
         ("/repo/.git/objects/ab/cdef", False),
         ("/repo/.git/refs/heads/HEAD", False),
         ("/repo/.git/ORIG_HEAD", False),
+        ("/repo/.git/logs/HEAD", True),
+        ("/repo/.git/logs/refs/heads/main", False),
+        ("/repo/.git/logs/index", False),
         ("/repo/src/app.py", True),
         ("/repo/node_modules/x.js", True),
     ],
@@ -226,6 +283,13 @@ async def test_changes_matter_unless_every_path_is_ignored(scratch: Scratch) -> 
 
     assert not await changes_matter(repository, frozenset({scratch.root / "a.log", scratch.root / "b.log"}))
     assert await changes_matter(repository, frozenset({scratch.root / "a.log", scratch.root / "app.py"}))
+
+
+async def test_changes_inside_a_submodule_matter(scratch: Scratch, tmp_path: Path) -> None:
+    add_submodule(scratch, tmp_path)
+    repository = await find_repository(scratch.root)
+
+    assert await changes_matter(repository, frozenset({scratch.root / "sub" / "new.txt"}))
 
 
 async def test_changes_to_the_git_state_always_matter(scratch: Scratch) -> None:

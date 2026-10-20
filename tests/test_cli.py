@@ -29,6 +29,8 @@ from tests.conftest import Terminal
         (["--new"], ["review", "--new"]),
         (["--data-home", "/d", "--review", "x"], ["--data-home", "/d", "review", "--review", "x"]),
         (["--config-home", "/c", "list"], ["--config-home", "/c", "list"]),
+        (["--data-home=/d", "list"], ["--data-home=/d", "list"]),
+        (["--config-home=/c", "--new"], ["--config-home=/c", "review", "--new"]),
         (["show", "abc"], ["show", "abc"]),
         (["delete", "abc"], ["delete", "abc"]),
         (["review", "--new"], ["review", "--new"]),

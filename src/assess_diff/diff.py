@@ -193,7 +193,7 @@ def strip_prefix(path: str) -> str | None:
 
 def parse_diff(text: str) -> tuple[FileChange, ...]:
     """
-    Parse the output of `git diff -U0 --no-color --no-ext-diff -M --src-prefix=a/ --dst-prefix=b/`.
+    Parse the output of `git diff -U0 --no-color --no-ext-diff --no-textconv -M --src-prefix=a/ --dst-prefix=b/`.
 
     Paths come from the `---`/`+++` and `rename from`/`rename to` headers,
     which hold one path each, rather than from the `diff --git` line, where a path with a space in it is ambiguous.

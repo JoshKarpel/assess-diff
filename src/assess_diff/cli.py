@@ -51,6 +51,7 @@ from assess_diff.ui.app import assess_app
 
 COMMANDS = ("review", "list", "show", "delete")
 ANSWERED = ("-h", "--help", "--version")
+GROUP_OPTIONS = ("--data-home", "--config-home")
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,8 +197,12 @@ def with_default_command(argv: Sequence[str]) -> list[str]:
     """
     arguments = list(argv)
     index = 0
-    while index < len(arguments) and arguments[index] in ("--data-home", "--config-home"):
-        index += 2
+    while index < len(arguments):
+        name, equals, _ = arguments[index].partition("=")
+        if name not in GROUP_OPTIONS:
+            break
+        # `--data-home=/d` carries its value; `--data-home /d` takes the next argument.
+        index += 1 if equals else 2
     rest = arguments[index:]
     if rest and (rest[0] in COMMANDS or rest[0] in ANSWERED):
         return arguments

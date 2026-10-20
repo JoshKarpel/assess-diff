@@ -25,6 +25,11 @@ from counterweight.events import KeyPressed
 from counterweight.events import Receiver
 from counterweight.focus import ElementHandle
 from counterweight.focus import FocusHandle
+from counterweight.handlers import first
+from counterweight.handlers import on_click
+from counterweight.handlers import page_down
+from counterweight.handlers import page_up
+from counterweight.headless import use_text_input
 from counterweight.hooks import use_effect
 from counterweight.hooks import use_memo
 from counterweight.hooks import use_state
@@ -55,8 +60,10 @@ from assess_diff.navigation import in_mode
 from assess_diff.navigation import moved
 from assess_diff.navigation import next_comment
 from assess_diff.navigation import next_stop
+from assess_diff.navigation import placements
 from assess_diff.navigation import primary
 from assess_diff.navigation import recovered
+from assess_diff.navigation import recovered_selection
 from assess_diff.navigation import row_lines
 from assess_diff.navigation import selection_span
 from assess_diff.preferences import Preferences
@@ -75,6 +82,7 @@ from assess_diff.storage import for_project
 from assess_diff.ui.diff_view import Actions
 from assess_diff.ui.diff_view import diff_pane
 from assess_diff.ui.diff_view import summary_dialog
+from assess_diff.ui.diff_view import use_stable_actions
 from assess_diff.ui.file_picker import file_picker
 from assess_diff.ui.review_manager import ManagerActions
 from assess_diff.ui.review_manager import review_manager
@@ -84,8 +92,6 @@ from assess_diff.ui.theme_picker import theme_picker
 
 # How long the watcher waits for a burst of changes to settle before the diff is recomputed.
 DEBOUNCE_MILLISECONDS = 200
-
-PAGE_POSITIONS = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +105,15 @@ class Session:
     confirming_delete: int | None
     picking_theme: PickingTheme | None
     managing: Managing | None
+    naming: Naming | None
+
+
+@dataclass(frozen=True, slots=True)
+class Naming:
+    """The open review's name is being edited in the status line: its field's focus handle, and what's typed so far."""
+
+    handle: FocusHandle
+    name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +133,13 @@ class Managing:
 
 
 INITIAL_SESSION = Session(
-    cursor=SummaryAt(), selection=None, editing=None, confirming_delete=None, picking_theme=None, managing=None
+    cursor=SummaryAt(),
+    selection=None,
+    editing=None,
+    confirming_delete=None,
+    picking_theme=None,
+    managing=None,
+    naming=None,
 )
 
 
@@ -144,7 +165,44 @@ def plural(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
+NAME_STYLE = text_bold | text_color("amber", 300)
+
+
+@component
+def name_field(
+    naming: Naming,
+    set_name: Callable[[Callable[[str], str]], None],
+    rename: Callable[[str], InputResponse],
+    cancel: Callable[[], InputResponse],
+) -> Text:
+    """The open review's name in the status line as a field: Enter renames the review to what's typed, Escape doesn't."""
+    field = use_text_input(naming.name, set_name, handle=naming.handle)
+
+    def on_input(event: InputEvent, receiver: Receiver) -> InputResponse:
+        match event:
+            case KeyPressed(key=Key.Enter):
+                return rename(naming.name)
+            case KeyPressed(key=Key.Escape):
+                return cancel()
+            case _:
+                return field.on_input(event, receiver)
+
+    cursor = (text_color("slate", 900) | text_bg("amber", 300)).text_style
+    return Text(
+        content=(
+            Chunk(content=" "),
+            Chunk(content=field.before_cursor),
+            Chunk(content=field.at_cursor, style=cursor),
+            Chunk(content=field.after_cursor),
+            Chunk(content=" "),
+        ),
+        style=NAME_STYLE | text_wrap_none | text_bg("slate", 700),
+        on_input=first(on_input, field.on_press),
+    )
+
+
 def status_line(review: Review, diff: Diff | None, mode: ViewMode) -> tuple[Chunk, ...]:
+    """Everything the status line says after the review's name."""
     branch = review.branch or "detached HEAD"
     comments = len(review.comments)
     if diff is None:
@@ -155,8 +213,6 @@ def status_line(review: Review, diff: Diff | None, mode: ViewMode) -> tuple[Chun
         against = f"against {diff.base.label} (merge base {diff.base.short})"
     files = "" if diff is None else plural(len(diff.files), "file")
     return (
-        Chunk(content=" assess-diff ", style=text_bold | text_bg("indigo", 700)),
-        Chunk(content=f" {review.name} ", style=text_bold | text_color("amber", 300)),
         Chunk(content=f" {branch} ", style=text_bold),
         Chunk(content=against, style=text_color("slate", 300)),
         Chunk(content=f"  {files}  {plural(comments, 'comment')}  {mode}", style=text_color("slate", 400)),
@@ -164,6 +220,8 @@ def status_line(review: Review, diff: Diff | None, mode: ViewMode) -> tuple[Chun
 
 
 def key_hints(session: Session) -> str:
+    if session.naming is not None:
+        return " enter rename  esc keep the old name"
     if session.managing is not None:
         return " ↑↓ choose  enter open  e rename  dd delete  esc close"
     if session.picking_theme is not None:
@@ -172,7 +230,7 @@ def key_hints(session: Session) -> str:
         return " esc done  (everything you type is saved as you type it)"
     if session.confirming_delete is not None:
         return f" press d again to delete #{session.confirming_delete}, anything else to keep it"
-    return " ↑↓ move  ⇧↑↓ select  tab hunk/comment  n/N comment  enter comment  dd delete  r summary  s split  b base  t theme  f files  o reviews  c copy  q quit"
+    return " ↑↓ move  ⇧↑↓ select  tab hunk/comment  n/N comment  enter comment  dd delete  r summary  e rename  s split  b base  t theme  f files  o reviews  c copy  q quit"
 
 
 @component
@@ -195,6 +253,8 @@ def assess_app(
     diff, set_diff = use_state(no_diff)
     session, set_session = use_state(INITIAL_SESSION)
     notice, set_notice = use_state(no_notice)
+    # Apart from `notice`, so the refresh that recovers from a git failure can clear it without clearing any other.
+    git_error, set_git_error = use_state(no_notice)
     diff_focus, _ = use_state(FocusHandle)
     picker_focus, _ = use_state(FocusHandle)
     cursor_element, _ = use_state(ElementHandle)
@@ -205,7 +265,9 @@ def assess_app(
                 base = await resolve_base(repository, base_mode, target or "HEAD")
                 set_diff(await compute_diff(repository, base))
             except GitError as error:
-                set_notice(str(error))
+                set_git_error(str(error))
+            else:
+                set_git_error(None)
 
         await refresh()
         # A linked worktree's git directory is outside it, so it's watched beside it.
@@ -227,7 +289,7 @@ def assess_app(
     theme = (highlighted_theme(themes(), picking.query) if picking is not None else None) or preferences.theme
     document = use_memo(
         lambda: None if diff is None else build_document(diff, review.comments, mode),
-        (diff, review.comments, mode),
+        (diff, placements(review.comments), mode),
     )
     outdated = use_memo(
         lambda: frozenset(
@@ -236,6 +298,7 @@ def assess_app(
         (diff, review.comments),
     )
     cursor = SummaryAt() if document is None else recovered(document, session.cursor)
+    selection = None if document is None else recovered_selection(document, cursor, session.selection)
 
     def update_review(edit: Callable[[Review], Review]) -> None:
         if (saved_notice := open_review.update(edit)) is not None:
@@ -244,7 +307,9 @@ def assess_app(
 
     def start_editing(number: int | None) -> InputResponse:
         """Edit comment `number` where it's drawn, or with `None`, the summary in its dialog, leaving the cursor be."""
-        handle = FocusHandle()
+        # An editor that's already open keeps its handle: counterweight refuses a mounted component a new one.
+        editing = session.editing
+        handle = editing[1] if editing is not None and editing[0] == number else FocusHandle()
         if number is None:
             set_session(lambda s: replace(s, editing=(None, handle), confirming_delete=None))
             return FocusOn(handle)
@@ -285,18 +350,20 @@ def assess_app(
                 set_session(lambda s: replace(s, cursor=position, selection=None, confirming_delete=None))
                 return FocusOn(diff_focus)
 
-    actions = Actions(
-        press_row=press_row,
-        press_position=press_position,
-        edit_comment=lambda number, edit: update_review(lambda r: edit_comment(r, number, edit)),
-        edit_summary=lambda edit: update_review(lambda r: edit_summary(r, edit)),
-        finish_editing=finish_editing,
+    actions = use_stable_actions(
+        Actions(
+            press_row=press_row,
+            press_position=press_position,
+            edit_comment=lambda number, edit: update_review(lambda r: edit_comment(r, number, edit)),
+            edit_summary=lambda edit: update_review(lambda r: edit_summary(r, edit)),
+            finish_editing=finish_editing,
+        )
     )
 
     def comment_on_selection(document: Document, row: RowAt) -> InputResponse:
-        first_row, last_row = selection_span(row, session.selection)
+        first_row, last_row = selection_span(row, selection)
         layout = document.layout_of(row)
-        started = session.selection or row
+        started = selection or row
         side = primary(layout.rows[started.index]).side
         lines = tuple(line for row in layout.rows[first_row : last_row + 1] for line in row_lines(row))
         anchor, excerpt = anchor_for(layout.file, lines, side, document.diff.base.commit)
@@ -304,7 +371,7 @@ def assess_app(
         update_review(lambda r: add_comment(r, anchor, excerpt, open_review.now()))
         return start_editing(number)
 
-    def go(position: Position, block: ScrollAlignment = "nearest") -> InputResponse:
+    def go(position: Position, block: ScrollAlignment = "nearest") -> ScrollIntoView:
         set_session(lambda s: replace(s, cursor=position, selection=None, confirming_delete=None))
         return ScrollIntoView(cursor_element, block=block)
 
@@ -319,10 +386,14 @@ def assess_app(
                 return go(moved(document, cursor, 1))
             case KeyPressed(key=Key.Up | "k"):
                 return go(moved(document, cursor, -1))
-            case KeyPressed(key=Key.PageDown):
-                return go(moved(document, cursor, PAGE_POSITIONS))
-            case KeyPressed(key=Key.PageUp):
-                return go(moved(document, cursor, -PAGE_POSITIONS))
+            # As a text area pages: the view scrolls by a page, and the cursor moves as many positions as it scrolls,
+            # which keeps it in place on screen across diff rows, and short of it across taller comments.
+            case KeyPressed(key=Key.PageDown) if (scroll := receiver.scroll) is not None:
+                page = page_down(receiver.subtree, scroll)
+                return page, go(moved(document, cursor, page.y))
+            case KeyPressed(key=Key.PageUp) if (scroll := receiver.scroll) is not None:
+                page = page_up(receiver.subtree, scroll)
+                return page, go(moved(document, cursor, page.y))
             case KeyPressed(key=Key.Home):
                 return go(document.positions[0])
             case KeyPressed(key=Key.End):
@@ -337,10 +408,10 @@ def assess_app(
                 return go(next_comment(document, cursor, -1), block="center")
             case KeyPressed(key=Key.ShiftDown | Key.ShiftUp | "J" | "K") if isinstance(cursor, RowAt):
                 delta = 1 if event.key in (Key.ShiftDown, "J") else -1
-                anchor = session.selection or cursor
+                anchor = selection or cursor
                 set_session(lambda s: replace(s, cursor=extended(document, cursor, delta), selection=anchor))
                 return ScrollIntoView(cursor_element, block="nearest")
-            case KeyPressed(key=Key.Escape) if session.selection is not None:
+            case KeyPressed(key=Key.Escape) if selection is not None:
                 set_session(lambda s: replace(s, selection=None))
                 return ()
             case KeyPressed(key=Key.Enter):
@@ -429,12 +500,41 @@ def assess_app(
     def delete_review(review_id: str) -> None:
         open_review.store.delete(review_id)
         if review_id == open_review.review.id:
+            # A new review takes its place behind the dialog, which stays open and focused to go on managing.
+            managing = session.managing
             start_new_review()
+            set_session(lambda s: replace(s, managing=managing))
         listed = project_reviews()
         set_session(lambda s: s if s.managing is None else replace(s, managing=replace(s.managing, reviews=listed)))
 
     def close_manager() -> InputResponse:
         set_session(lambda s: replace(s, managing=None))
+        return FocusOn(diff_focus)
+
+    def start_naming() -> InputResponse:
+        """Edit the open review's name in the status line, carrying on with what's typed if it's already open."""
+        naming = session.naming or Naming(FocusHandle(), review.name)
+        set_session(lambda s: replace(s, naming=naming))
+        return FocusOn(naming.handle)
+
+    def set_name(edit: Callable[[str], str]) -> None:
+        set_session(lambda s: s if s.naming is None else replace(s, naming=replace(s.naming, name=edit(s.naming.name))))
+
+    def finish_naming(typed: str) -> InputResponse:
+        # As the review manager renames: surrounding spaces go, but a name of only spaces stays rather than vanishing.
+        name = typed.strip() or typed
+        update_review(lambda r: rename(r, name))
+        return cancel_naming()
+
+    def cancel_naming() -> InputResponse:
+        set_session(lambda s: replace(s, naming=None))
+        return FocusOn(diff_focus)
+
+    def return_to_diff() -> InputResponse:
+        """Focus the diff, closing any dialog and finishing any edit on the way, so nothing is left open unfocused."""
+        set_session(lambda s: replace(s, picking_theme=None, managing=None, naming=None))
+        if session.editing is not None:
+            return finish_editing()
         return FocusOn(diff_focus)
 
     manager_actions = ManagerActions(
@@ -450,7 +550,7 @@ def assess_app(
             case KeyPressed(key="q"):
                 return Quit()
             case KeyPressed(key="o"):
-                handle = FocusHandle()
+                handle = session.managing.handle if session.managing is not None else FocusHandle()
                 listed = project_reviews()
                 set_session(lambda s: replace(s, managing=Managing(handle, listed)))
                 return FocusOn(handle)
@@ -469,10 +569,12 @@ def assess_app(
                 update_review(lambda r: r.model_copy(update={"base_mode": new_base}))
                 return ()
             case KeyPressed(key="t"):
-                handle = FocusHandle()
+                handle = session.picking_theme.handle if session.picking_theme is not None else FocusHandle()
                 opened = PickingTheme(handle, Query.at(themes(), preferences.theme))
                 set_session(lambda s: replace(s, picking_theme=opened))
                 return FocusOn(handle)
+            case KeyPressed(key="e"):
+                return start_naming()
             case KeyPressed(key="f"):
                 return FocusOn(picker_focus)
             case KeyPressed(key="c"):
@@ -480,7 +582,7 @@ def assess_app(
                 set_notice(copy_notice)
                 return copy if copy is not None else ()
             case KeyPressed(key=Key.Escape | Key.Tab | Key.BackTab):
-                return FocusOn(diff_focus)
+                return return_to_diff()
             case _:
                 return None
 
@@ -494,9 +596,19 @@ def assess_app(
         style=col,
         on_input=on_global_key,
         children=(
-            Text(
-                content=status_line(review, diff, mode),
-                style=text_wrap_none | text_bg("slate", 900),
+            Div(
+                style=row | text_bg("slate", 900),
+                children=(
+                    Text(content=" assess-diff ", style=text_bold | text_wrap_none | text_bg("indigo", 700)),
+                    name_field(session.naming, set_name, finish_naming, cancel_naming)
+                    if session.naming is not None
+                    else Text(
+                        content=f" {review.name} ",
+                        style=NAME_STYLE | text_wrap_none,
+                        on_input=on_click(start_naming),
+                    ),
+                    Text(content=status_line(review, diff, mode), style=text_wrap_none | fill(1)),
+                ),
             ),
             Div(
                 style=row | fill(1),
@@ -508,7 +620,7 @@ def assess_app(
                         review.comments,
                         outdated,
                         cursor,
-                        session.selection,
+                        selection,
                         session.editing,
                         theme,
                         diff_focus,
@@ -519,9 +631,9 @@ def assess_app(
                 ),
             ),
             *(
-                (Text(content=f" {notice}", style=text_wrap_none | text_bg("slate", 900) | text_color("amber", 300)),)
-                if notice
-                else ()
+                Text(content=f" {line}", style=text_wrap_none | text_bg("slate", 900) | text_color("amber", 300))
+                for line in (git_error, notice)
+                if line
             ),
             Text(content=key_hints(session), style=text_wrap_none | text_bg("slate", 900) | text_color("slate", 400)),
             *(

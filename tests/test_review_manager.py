@@ -182,6 +182,18 @@ async def test_deleting_the_open_review_starts_a_new_one(harness: Harness) -> No
     assert harness.store.load("forked").review.summary == "new"
 
 
+async def test_deleting_the_open_review_keeps_the_dialog_open_and_answering_keys(harness: Harness) -> None:
+    seed(harness, REVIEW_ID, "the open one", minutes=9)
+    seed(harness, "other", "another one", minutes=5)
+
+    await harness.run([*keys("o", "j", "d", "d"), harness.shot(), *keys("j"), ENTER, harness.shot()])
+
+    entries = dialog(harness.frames[0])
+    assert (len(entries), entries[0]) == (2, "+ New review")
+    assert "another one" in entries[1]
+    assert " another one " in harness.frames[1].splitlines()[0]
+
+
 async def test_new_review_cannot_be_renamed_or_deleted(harness: Harness) -> None:
     await harness.run([*keys("o", "e", "d", "d"), harness.shot(), ESCAPE])
 
@@ -190,6 +202,19 @@ async def test_new_review_cannot_be_renamed_or_deleted(harness: Harness) -> None
 
 async def test_escape_closes_the_dialog(harness: Harness) -> None:
     await harness.run([*keys("o"), showing("Reviews"), ESCAPE, harness.shot()])
+
+    assert "│ Reviews" not in harness.frames[0]
+
+
+async def test_o_with_the_dialog_open_keeps_it_open(harness: Harness) -> None:
+    await harness.run([*keys("o"), showing("Reviews"), *keys("o"), harness.shot(), ESCAPE])
+
+    assert "│ Reviews" in harness.frames[0]
+
+
+@pytest.mark.parametrize("key", [Key.Tab, Key.BackTab])
+async def test_tabbing_out_closes_the_dialog(harness: Harness, key: Key) -> None:
+    await harness.run([*keys("o"), showing("Reviews"), *keys(key), harness.shot()])
 
     assert "│ Reviews" not in harness.frames[0]
 

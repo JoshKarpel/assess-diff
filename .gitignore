@@ -221,3 +221,6 @@ __marimo__/
 
 # mutmut
 mutants/
+
+# Profiles written by `just profile`
+profiles/

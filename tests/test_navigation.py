@@ -21,8 +21,10 @@ from assess_diff.navigation import moved
 from assess_diff.navigation import next_comment
 from assess_diff.navigation import next_stop
 from assess_diff.navigation import place
+from assess_diff.navigation import placements
 from assess_diff.navigation import primary
 from assess_diff.navigation import recovered
+from assess_diff.navigation import recovered_selection
 from assess_diff.navigation import row_lines
 from assess_diff.navigation import selection_span
 from tests.builders import added
@@ -92,6 +94,33 @@ def test_split_document_pairs_rows() -> None:
         CommentAt(1),
         RowAt("app.py", 2),
         RowAt("app.py", 3),
+    )
+
+
+def test_placements_ignore_what_a_comment_says() -> None:
+    excerpt = ((LineKind.ADDED, "x = 1"),)
+
+    assert placements((comment(3, "a.py", 2, 4, excerpt, body="first"),)) == placements(
+        (comment(3, "a.py", 2, 4, excerpt, body="first, then more"),)
+    )
+
+
+@pytest.mark.parametrize(
+    ("number", "path", "start", "end", "side"),
+    [
+        (4, "a.py", 2, 4, Side.NEW),
+        (3, "b.py", 2, 4, Side.NEW),
+        (3, "a.py", 1, 4, Side.NEW),
+        (3, "a.py", 2, 5, Side.NEW),
+        (3, "a.py", 2, 4, Side.OLD),
+    ],
+    ids=["number", "path", "start", "end", "side"],
+)
+def test_placements_change_with_where_a_comment_is(number: int, path: str, start: int, end: int, side: Side) -> None:
+    excerpt = ((LineKind.ADDED, "x = 1"),)
+
+    assert placements((comment(3, "a.py", 2, 4, excerpt),)) != placements(
+        (comment(number, path, start, end, excerpt, side=side),)
     )
 
 
@@ -172,6 +201,22 @@ def test_extended_stays_within_the_file() -> None:
         RowAt("app.py", 4),
         RowAt("app.py", 0),
     ]
+
+
+@pytest.mark.parametrize(
+    ("cursor", "selection", "expected"),
+    [
+        (RowAt("app.py", 1), RowAt("app.py", 3), RowAt("app.py", 3)),
+        (RowAt("app.py", 1), RowAt("app.py", 9), RowAt("app.py", 4)),
+        (RowAt("app.py", 1), None, None),
+        (RowAt("notes.md", 0), RowAt("app.py", 3), None),
+        (HeaderAt("app.py"), RowAt("app.py", 3), None),
+    ],
+)
+def test_recovered_selection_is_clamped_to_its_file_and_dropped_once_the_cursor_leaves_it(
+    cursor: Position, selection: RowAt | None, expected: RowAt | None
+) -> None:
+    assert recovered_selection(DOCUMENT, cursor, selection) == expected
 
 
 def test_extended_from_a_file_no_longer_there_stays_put() -> None:

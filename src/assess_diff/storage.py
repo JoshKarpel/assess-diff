@@ -6,9 +6,12 @@ This is the only module that reads or writes review files.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import os
 from collections.abc import Callable
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -86,6 +89,17 @@ class ReviewStore:
         content = path.read_bytes()
         return Stored(review=parsed(path, content), digest=digest(content))
 
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """
+        Holds the store's lock, which every save holds across its check and its write,
+        so two processes saving one review take turns rather than both passing the check.
+        """
+        self.directory.mkdir(parents=True, exist_ok=True)
+        with (self.directory / ".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+
     def save(self, review: Review, previous: str | None) -> Stored:
         """
         Write `review`, replacing its file in one step, so a crash mid-write leaves the last save whole.
@@ -97,14 +111,14 @@ class ReviewStore:
                 so saving would drop whatever another process wrote.
         """
         path = self.path(review.id)
-        current = digest(path.read_bytes()) if path.exists() else None
-        if current != previous:
-            raise ReviewChanged(f"Review {review.id} was changed by another process")
-        self.directory.mkdir(parents=True, exist_ok=True)
         content = review.model_dump_json(indent=2).encode()
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        temporary.write_bytes(content)
-        temporary.replace(path)
+        with self.locked():
+            current = digest(path.read_bytes()) if path.exists() else None
+            if current != previous:
+                raise ReviewChanged(f"Review {review.id} was changed by another process")
+            temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            temporary.write_bytes(content)
+            temporary.replace(path)
         return Stored(review=review, digest=digest(content))
 
     def delete(self, review_id: str) -> None:

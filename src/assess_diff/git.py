@@ -45,18 +45,20 @@ class Repository:
     """The checked-out branch, or `None` with a detached `HEAD`."""
 
 
-# The files in a worktree's git directory whose changes can change the diff: a commit or a checkout moves `HEAD`,
-# and both rewrite the index. Everything else there (objects, logs, locks) churns without changing it.
-GIT_STATE_FILES = frozenset({"HEAD", "index"})
+# The files in a worktree's git directory whose changes can change the diff: a checkout rewrites `HEAD` and the index,
+# and every move of `HEAD` appends to its reflog, including a commit or `reset --soft` that writes only a branch ref
+# (in the common directory, for a linked worktree) and leaves `HEAD` and the index alone.
+# Everything else there (objects, other logs, locks) churns without changing the diff.
+GIT_STATE_FILES = frozenset({Path("HEAD"), Path("index"), Path("logs/HEAD")})
 
 
 def is_watched(git_dir: Path, path: Path) -> bool:
     """
     Whether the watcher passes on a change to `path`: anything outside the git directory,
-    and the git directory's `HEAD` and index. Ignored files are filtered afterwards, by git itself.
+    and the git directory's `HEAD`, index and `HEAD` reflog. Ignored files are filtered afterwards, by git itself.
     """
     if path.is_relative_to(git_dir):
-        return path.parent == git_dir and path.name in GIT_STATE_FILES
+        return path.relative_to(git_dir) in GIT_STATE_FILES
     return True
 
 
@@ -112,7 +114,11 @@ async def changes_matter(repository: Repository, paths: frozenset[Path]) -> bool
     in_worktree = frozenset(path for path in paths if not path.is_relative_to(repository.git_dir))
     if in_worktree != paths:
         return True
-    return bool(in_worktree - await ignored(repository, in_worktree))
+    try:
+        return bool(in_worktree - await ignored(repository, in_worktree))
+    except GitError:
+        # `check-ignore` refuses a path inside a submodule, and a change there can dirty the submodule in the diff.
+        return True
 
 
 async def find_repository(path: Path) -> Repository:
@@ -172,6 +178,8 @@ async def compute_diff(repository: Repository, base: Base) -> Diff:
             "-U0",
             "--no-color",
             "--no-ext-diff",
+            # A textconv driver's hunks would count lines in its output, not in the working-tree file they're laid on.
+            "--no-textconv",
             "-M",
             "--src-prefix=a/",
             "--dst-prefix=b/",
@@ -228,6 +236,9 @@ def read_lines(path: Path) -> tuple[str, ...] | str:
     except FileNotFoundError:
         # The file went away between `git diff` and this read; the watcher brings the next diff.
         return "File removed while reading"
+    except IsADirectoryError:
+        # A submodule, or an untracked repository nested in the worktree, which `ls-files` lists as `path/`.
+        return "Submodule or nested repository"
     if b"\0" in content:
         return "Binary file"
     try:

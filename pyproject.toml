@@ -59,7 +59,7 @@ faulthandler_exit_on_timeout = true
 [tool.mypy]
 pretty = true
 show_error_codes = true
-files = ["src", "tests"]
+files = ["src", "tests", "benchmarks"]
 exclude = ["mutants/"]
 strict = true
 plugins = ["pydantic.mypy"]

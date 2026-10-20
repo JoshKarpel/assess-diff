@@ -4,6 +4,7 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from threading import Thread
 
 import pytest
 
@@ -14,6 +15,7 @@ from assess_diff.storage import NoSuchReview
 from assess_diff.storage import OpenReview
 from assess_diff.storage import ReviewChanged
 from assess_diff.storage import ReviewStore
+from assess_diff.storage import Stored
 from assess_diff.storage import digest
 from assess_diff.storage import for_project
 from assess_diff.storage import reviews_directory
@@ -56,7 +58,36 @@ def test_save_then_load_round_trips(store: ReviewStore) -> None:
 def test_save_writes_atomically_leaving_no_temporary_file(store: ReviewStore) -> None:
     store.save(review(), None)
 
-    assert [path.name for path in store.directory.iterdir()] == [f"{review().id}.json"]
+    assert sorted(path.name for path in store.directory.iterdir()) == [".lock", f"{review().id}.json"]
+
+
+def test_save_waits_for_the_lock_and_then_sees_what_was_written_under_it(store: ReviewStore) -> None:
+    first = store.save(review(summary="mine"), None)
+    outcome: list[Stored | Exception] = []
+
+    def save_later() -> None:
+        try:
+            outcome.append(store.save(review(summary="mine, later"), first.digest))
+        except ReviewChanged as error:
+            outcome.append(error)
+
+    with store.locked():
+        saver = Thread(target=save_later)
+        saver.start()
+        # A save that skipped the lock would finish in well under this; one that takes it can't finish at all.
+        saver.join(timeout=0.5)
+        assert saver.is_alive()
+        store.path(first.review.id).write_text(review(summary="theirs").model_dump_json())
+    saver.join()
+
+    assert [type(result) for result in outcome] == [ReviewChanged]
+    assert store.load(first.review.id).review.summary == "theirs"
+
+
+def test_reviews_leaves_out_the_lock_file(store: ReviewStore) -> None:
+    store.save(review(), None)
+
+    assert [r.id for r in store.reviews()] == [review().id]
 
 
 def test_save_over_a_file_changed_by_another_process_refuses(store: ReviewStore) -> None:

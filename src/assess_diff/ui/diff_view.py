@@ -28,6 +28,8 @@ from counterweight.handlers import scroll_on_wheel
 from counterweight.hooks import use_focus
 from counterweight.hooks import use_memo
 from counterweight.hooks import use_rects
+from counterweight.hooks import use_ref
+from counterweight.hooks import use_state
 from counterweight.keys import Key
 from counterweight.styles import Style
 from counterweight.styles.utilities import *
@@ -62,12 +64,20 @@ class Run:
     highlight: Highlight
 
 
+ROWS_PER_BLOCK = 128
+"""
+Runs are cut at every multiple of this many rows as well, so a cursor move changes the text of only the block or two
+it moves within, and layout measures only those again, rather than the whole file on either side of the cursor.
+"""
+
+
 def runs(
     row_count: int, breaks: frozenset[int], cursor: int | None, selected: tuple[int, int] | None
 ) -> tuple[Run, ...]:
     """
     A file's rows cut into runs: at the cursor's row, which is drawn on its own to carry the scroll target,
-    at the edges of the selection, and after each row in `breaks`, which has comments drawn after it.
+    at the edges of the selection, after each row in `breaks`, which has comments drawn after it,
+    and at the end of each block of `ROWS_PER_BLOCK` rows.
     """
 
     def highlight(index: int) -> Highlight:
@@ -81,7 +91,8 @@ def runs(
     start = 0
     for index in range(row_count):
         is_last = index == row_count - 1
-        ends = is_last or index in breaks or index == cursor or index + 1 == cursor
+        is_block_end = (index + 1) % ROWS_PER_BLOCK == 0
+        ends = is_last or is_block_end or index in breaks or index == cursor or index + 1 == cursor
         if not ends and highlight(index + 1) == highlight(index):
             continue
         found.append(Run(start, index + 1, highlight(index)))
@@ -98,6 +109,44 @@ class Actions:
     edit_comment: Callable[[int, Callable[[str], str]], None]
     edit_summary: Callable[[Callable[[str], str]], None]
     finish_editing: Callable[[], InputResponse]
+
+
+def use_stable_actions(actions: Actions) -> Actions:
+    """
+    An `Actions` that's the same object on every render, calling through to the `actions` passed in the latest one.
+    The app's handlers close over each render's state, so they're new every render,
+    and handing them down as they are would make every `memo` component below re-render on every key.
+    """
+    latest = use_ref(actions)
+    latest.current = actions
+
+    # Each looks up `latest.current` when it's called: passing `latest.current.press_row` itself instead
+    # would keep the first render's handler, and its state, for good.
+    def press_row(path: str, index: int, extend: bool) -> InputResponse:
+        return latest.current.press_row(path, index, extend)
+
+    def press_position(position: Position) -> InputResponse:
+        return latest.current.press_position(position)
+
+    def edit_comment(number: int, edit: Callable[[str], str]) -> None:
+        latest.current.edit_comment(number, edit)
+
+    def edit_summary(edit: Callable[[str], str]) -> None:
+        latest.current.edit_summary(edit)
+
+    def finish_editing() -> InputResponse:
+        return latest.current.finish_editing()
+
+    stable, _ = use_state(
+        lambda: Actions(
+            press_row=press_row,
+            press_position=press_position,
+            edit_comment=edit_comment,
+            edit_summary=edit_summary,
+            finish_editing=finish_editing,
+        )
+    )
+    return stable
 
 
 def press_rows(path: str, start: int, actions: Actions) -> InputHandler:
@@ -261,16 +310,22 @@ def file_view(
             if index > run.start:
                 lines.append(Chunk.newline())
             lines.extend(row_chunks(layout.rows[index], syntax, digits, width, run.highlight))
+        # Keyed by the row it starts at, so the node scroll anchoring holds still always starts at that row.
+        # Unkeyed, the node at an index shows whichever run is there now: the cursor's run moving down a row
+        # would read to anchoring as content moving, and scroll the view along with the cursor.
         children.append(
-            Text(
-                content=tuple(lines),
-                style=text_wrap_none,
-                handle=cursor_element if run.highlight is Highlight.CURSOR else None,
-                on_input=press_rows(path, run.start, actions),
-            )
+            rows_run(
+                tuple(lines), path, run.start, cursor_element if run.highlight is Highlight.CURSOR else None, actions
+            ).with_key(f"rows-{run.start}")
         )
         children.extend(boxes(run.stop - 1))
     return Div(style=col | margin_bottom(1), children=tuple(children))
+
+
+@component
+def rows_run(lines: tuple[Chunk, ...], path: str, start: int, handle: ElementHandle | None, actions: Actions) -> Text:
+    """A run of a file's rows starting at row `start`, drawn alike, with `handle` if it's the cursor's row."""
+    return Text(content=lines, style=text_wrap_none, handle=handle, on_input=press_rows(path, start, actions))
 
 
 SUMMARY_TITLE = (Chunk(content="Review summary", style=text_bold | text_color("amber", 300)),)

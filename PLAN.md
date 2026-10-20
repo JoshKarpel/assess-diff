@@ -94,6 +94,8 @@ and a save that finds the file's content different refuses to overwrite it.
 Instead it saves this process's version as a new review and says so,
 so neither process's comments are dropped.
 A content digest rather than a modification time, since two writes within one clock tick share a time.
+Each save holds an `flock` on a lock file in the reviews directory across that check and its write,
+so two processes saving at once take turns rather than both passing the check.
 
 Every edit, keystrokes in a comment included, is saved before the UI shows it.
 The writes are a few kilobytes each,
@@ -126,12 +128,13 @@ the open review is marked, and so are reviews from other worktrees.
 Enter starts a new review or opens the highlighted one,
 `e` renames it in place (Enter keeps the name, Escape drops the edit),
 and `d` pressed twice deletes it, as for comments.
-Deleting the open review starts a new one in its place.
+Deleting the open review starts a new one in its place, and leaves the dialog open.
 The list is read from disk when the dialog opens and after each rename or delete,
 so a review another process saved since shows up the next time.
 
 A review's name defaults to the minute it started, in local time (`2026-10-20 14:03`),
 and shows in the status line, in the dialog, and in `assess-diff list`.
+The open review can also be renamed where its name shows in the status line, with `e` or a click.
 
 ### Preferences: one JSON file under the XDG config directory
 
@@ -153,9 +156,10 @@ so the preview changes in the same render as the highlight, with no effect to wa
 
 The diff is built from two git calls and the working tree:
 
-1. `git diff -U0 --no-color --no-ext-diff -M <base>` lists the changed files,
+1. `git diff -U0 --no-color --no-ext-diff --no-textconv -M <base>` lists the changed files,
    their renames, and each change region with the lines it removes and adds.
-   `-U0` makes every separate change its own hunk, so each is its own Tab stop.
+   `-U0` makes every separate change its own hunk, so each is its own Tab stop,
+   and `--no-textconv` keeps the hunks counting the file's own lines, which the rows are laid on.
 2. `git ls-files --others --exclude-standard` adds untracked files, as wholly added,
    since agents create new files and plain `git diff` ignores them.
 3. Each changed file's content is read from the working tree.
@@ -165,7 +169,7 @@ so the working tree's content and the hunks' removed and added lines are the who
 the base's content never has to be read.
 A pure function walks the working tree's lines with the hunks to build the rows of the whole file.
 A property test checks that the rows rebuild both versions exactly, against real git.
-Binary files, and files over 1 MiB, show a placeholder instead of their lines.
+Binary files, files over 1 MiB, and submodules or nested repositories show a placeholder instead of their lines.
 
 The base is `HEAD`, or `git merge-base HEAD <branch>`,
 where the branch is `--base` if given, otherwise what `origin/HEAD` points at,
@@ -178,7 +182,8 @@ With none of those, the view stays on `HEAD`, and `b` says to pass `--base`.
 (and a linked worktree's git directory, which lives outside it)
 in an effect on the root component.
 Its own filter passes everything in the worktree,
-and from the git directory only `HEAD` and the index, which a commit or a checkout rewrites.
+and from the git directory only `HEAD`, the index, and `logs/HEAD`,
+which a commit, a checkout, or a reset that moves only a branch ref rewrites.
 Each batch of worktree changes then goes through one `git check-ignore --stdin` call,
 so every ignore file git reads applies exactly as git applies it,
 and a batch that's entirely ignored recomputes nothing.
@@ -239,11 +244,22 @@ so a comment started there anchors to the new side; the unified view reaches eve
 Each file's rows are drawn as a few `Text` elements, one per run of rows drawn alike,
 with the cursor's row as an element of its own that carries the scroll target's `ElementHandle`
 (the same move `use_text_area` makes for its cursor row).
-That keeps the element count near the number of hunks and comments rather than the number of lines,
+Runs are also cut at the end of every block of 128 rows,
+so a cursor move changes the text of only the block or two it moves within,
+and layout measures only those again rather than the whole file on either side of the cursor.
+That keeps the element count near the number of blocks, hunks, and comments rather than the number of lines,
 which matters because whole files are rendered.
+Each run is keyed by the row it starts at, so the node scroll anchoring holds still always shows the same rows,
+and a cursor moving down from the top of the view doesn't drag the view along with it.
 Each file's view is a `memo` component given the cursor and selection only when they're in that file,
+with the app's handlers behind one `Actions` that stays the same object across renders,
 so moving the cursor re-renders one or two files, and each row's chunks are cached by value.
+The document of positions is rebuilt only when the diff, the view, or a comment's number or anchor changes,
+not as a comment's text is typed.
 A click maps to a row through the receiver's relative position.
+
+`just bench` times how long each kind of key takes to answer on generated diffs of 2,000 to 40,000 lines,
+and `just profile` runs one of those workloads under the sampling profiler.
 
 Split view pairs each hunk's removed and added lines side by side, as GitHub does,
 with context lines on both sides, and cuts lines too long for their half with `…`.
@@ -290,13 +306,15 @@ which works where the terminal supports it, and tmux passes it on only with `set
 |-----------------------------|-----------------------------------------------------------------|
 | Up, Down, `k`, `j`          | Move the cursor                                                 |
 | Shift+Up, Shift+Down, `K`, `J` | Extend the selection                                         |
-| PageUp, PageDown, Home, End | Move the cursor further                                         |
+| PageUp, PageDown            | Scroll seven eighths of the view, as a text area pages, moving the cursor as far |
+| Home, End                   | Move the cursor to the summary or the last line                 |
 | Tab, Shift+Tab              | Next or previous hunk or comment                                |
 | `n`, `N`                    | Next or previous comment                                        |
 | Enter                       | Comment on the selection, or edit the comment under the cursor  |
 | Escape                      | Finish editing (an empty comment is discarded), or clear the selection |
 | `d`, `d`                    | Delete the comment under the cursor (pressed twice, to confirm) |
 | `r`                         | Write the review summary, in a dialog that keeps your place     |
+| `e`                         | Rename the review in the status line (Enter keeps the new name, Escape the old) |
 | `s`                         | Toggle unified and split views                                  |
 | `b`                         | Toggle the base between `HEAD` and the merge base               |
 | `t`                         | Choose the syntax theme                                         |
@@ -305,8 +323,12 @@ which works where the terminal supports it, and tmux passes it on only with `set
 | `c`                         | Copy the review as Markdown                                     |
 | `q`                         | Quit; the review is already saved                               |
 
+Tab, Shift+Tab, or an Escape nothing else takes, pressed in a dialog or an editor, closes it and returns to the diff,
+as Escape does in each, so nothing is left open without focus.
+
 Clicking a line moves the cursor there, Shift+click extends the selection,
-clicking a comment edits it, clicking the summary opens its dialog, and clicking a file in the picker jumps to it.
+clicking a comment edits it, clicking the summary opens its dialog, clicking the review's name renames it,
+and clicking a file in the picker jumps to it.
 The wheel scrolls either pane.
 
 ### CLI

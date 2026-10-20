@@ -27,6 +27,17 @@ alias t := test
 mutate *MUTANTS:
     uv run mutmut run "$@"
 
+[doc('Time how long the app takes to answer keys on generated diffs, passing any arguments on (see --help)')]
+[positional-arguments]
+bench *ARGS:
+    uv run python -m benchmarks.keys "$@"
+
+[doc('Profile one benchmark workload with the sampling profiler, writing a flamegraph to profiles/')]
+profile WORKLOAD="large/down":
+    mkdir -p profiles
+    uv run python -m profiling.sampling run --mode cpu --binary -o profiles/{{ replace(WORKLOAD, "/", "-") }}.bin -m benchmarks.keys --only {{ WORKLOAD }} --repeat 1
+    uv run python -m profiling.sampling replay --flamegraph -o profiles/{{ replace(WORKLOAD, "/", "-") }}.html profiles/{{ replace(WORKLOAD, "/", "-") }}.bin
+
 [doc('Upgrade all dependencies, and the tools in mise.toml')]
 upgrade:
     uv lock --upgrade

@@ -19,6 +19,7 @@ from assess_diff.diff import FileDiff
 from assess_diff.diff import Line
 from assess_diff.diff import SplitRow
 from assess_diff.diff import split_rows
+from assess_diff.review import Anchor
 from assess_diff.review import Comment
 
 
@@ -177,7 +178,17 @@ def layout_file(file: FileDiff, comments: tuple[Comment, ...], mode: ViewMode) -
     )
 
 
+def placements(comments: tuple[Comment, ...]) -> tuple[tuple[int, Anchor], ...]:
+    """What `build_document` reads of each comment: its number and its anchor, which a comment's body never changes."""
+    return tuple((comment.number, comment.anchor) for comment in comments)
+
+
 def build_document(diff: Diff, comments: tuple[Comment, ...], mode: ViewMode) -> Document:
+    """
+    The positions of `diff` in `mode`, with `comments` placed among them.
+    It reads only what `placements` returns of the comments, which the app memoizes it on,
+    so that typing in a comment doesn't lay out the whole diff again: reading more of them here means returning it there.
+    """
     paths = {file.path for file in diff.files}
     files = tuple(
         layout_file(file, tuple(comment for comment in comments if comment.anchor.path == file.path), mode)
@@ -247,6 +258,16 @@ def selection_span(cursor: RowAt, anchor: RowAt | None) -> tuple[int, int]:
     """The first and last row indexes selected from `anchor` (if it's in the cursor's file) to `cursor`."""
     start = anchor if anchor is not None and anchor.path == cursor.path else cursor
     return min(start.index, cursor.index), max(start.index, cursor.index)
+
+
+def recovered_selection(document: Document, cursor: Position, selection: RowAt | None) -> RowAt | None:
+    """
+    The selection's other end when the document changes under it: clamped to the rows its file still has,
+    or `None` once the cursor isn't on a row of that file, since a selection spans the rows of one file.
+    """
+    if selection is None or not isinstance(cursor, RowAt) or cursor.path != selection.path:
+        return None
+    return extended(document, selection, 0)
 
 
 def recovered(document: Document, cursor: Position) -> Position:
