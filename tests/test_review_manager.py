@@ -1,17 +1,24 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
+from counterweight.elements import Chunk
 from counterweight.events import KeyPressed
 from counterweight.keys import Key
+from counterweight.styles.utilities import text_bold
+from counterweight.styles.utilities import text_color
+from counterweight.styles.utilities import text_dim
 
 from assess_diff.diff import BaseMode
 from assess_diff.diff import LineKind
 from assess_diff.preferences import PreferencesFile
 from assess_diff.review import Review
 from assess_diff.storage import ReviewStore
+from assess_diff.ui.review_manager import entry_chunks
 from tests.builders import comment
+from tests.builders import review
 from tests.conftest import Scratch
 from tests.harness import CLOCK
 from tests.harness import REVIEW_ID
@@ -61,6 +68,27 @@ def dialog(frame: str) -> list[str]:
     first = next(index for index, line in enumerate(lines) if "│ Reviews" in line) + 1
     last = next(index for index, line in enumerate(lines) if "esc close   ●" in line or "press d again" in line)
     return [line.strip(" │") for line in lines[first:last]]
+
+
+@pytest.mark.parametrize(
+    ("is_open", "is_here", "marker"), [(True, True, "● "), (False, True, "  "), (False, False, "↪ ")]
+)
+def test_entry_marks_the_review_then_names_it_then_its_branch_comments_and_update(
+    is_open: bool, is_here: bool, marker: str
+) -> None:
+    # Already in the local zone, so the entry's conversion to local time leaves it as written wherever this runs.
+    updated = datetime(2026, 7, 21, 9, 47).astimezone()
+    detached = review(
+        comment(1, "a.py", 1, 1, ((LineKind.ADDED, "a"),)),
+        comment(2, "b.py", 4, 6, ((LineKind.ADDED, "b"),)),
+        branch=None,
+    ).model_copy(update={"name": "the detached one", "updated": updated})
+
+    assert entry_chunks(detached, is_open, is_here) == (
+        Chunk(content=marker, style=text_color("amber", 300)),
+        Chunk(content="the detached one", style=text_bold),
+        Chunk(content="  detached HEAD  2 comments  updated 2026-07-21 09:47", style=text_dim),
+    )
 
 
 async def test_o_lists_new_review_then_this_projects_reviews_most_recent_first(harness: Harness) -> None:

@@ -6,12 +6,14 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from assess_diff.diff import BaseMode
 from assess_diff.diff import LineKind
 from assess_diff.diff import Side
-from assess_diff.review import Anchor
 from assess_diff.review import ExcerptLine
+from assess_diff.review import NewAnchor
+from assess_diff.review import OldAnchor
 from assess_diff.review import UnreadableReview
 from assess_diff.review import add_comment
 from assess_diff.review import anchor_for
@@ -44,7 +46,7 @@ FILE = modified(
 
 
 def test_add_comment_numbers_it_next_and_leaves_it_empty() -> None:
-    anchor = Anchor(path="src/app.py", side=Side.NEW, start=2, end=3, base_commit=None)
+    anchor = NewAnchor(path="src/app.py", side=Side.NEW, start=2, end=3, base_commit=None)
     excerpt = (ExcerptLine(kind=LineKind.ADDED, text="    return compute()"),)
 
     after = add_comment(review(comment(4, "x.py", 1, 1, ())), anchor, excerpt, LATER)
@@ -103,7 +105,7 @@ def test_anchor_for_new_side_spans_the_new_lines_and_keeps_every_selected_line()
 
     anchor, excerpt = anchor_for(FILE, selected, Side.NEW, BASE_COMMIT)
 
-    assert anchor == Anchor(path="src/app.py", side=Side.NEW, start=2, end=3, base_commit=None)
+    assert anchor == NewAnchor(path="src/app.py", side=Side.NEW, start=2, end=3, base_commit=None)
     assert excerpt == (
         ExcerptLine(kind=LineKind.REMOVED, text="    return None"),
         ExcerptLine(kind=LineKind.ADDED, text="    return compute()"),
@@ -114,7 +116,7 @@ def test_anchor_for_new_side_spans_the_new_lines_and_keeps_every_selected_line()
 def test_anchor_for_old_side_records_the_base_commit() -> None:
     anchor, _ = anchor_for(FILE, FILE.lines[1:2], Side.OLD, BASE_COMMIT)
 
-    assert anchor == Anchor(path="src/app.py", side=Side.OLD, start=2, end=2, base_commit=BASE_COMMIT)
+    assert anchor == OldAnchor(path="src/app.py", side=Side.OLD, start=2, end=2, base_commit=BASE_COMMIT)
 
 
 def test_anchor_for_keeps_the_unified_order_whatever_order_the_lines_come_in() -> None:
@@ -124,7 +126,7 @@ def test_anchor_for_keeps_the_unified_order_whatever_order_the_lines_come_in() -
 
 
 def test_anchored_lines_are_on_the_anchors_side_within_its_range() -> None:
-    anchor = Anchor(path="src/app.py", side=Side.NEW, start=2, end=4, base_commit=None)
+    anchor = NewAnchor(path="src/app.py", side=Side.NEW, start=2, end=4, base_commit=None)
 
     assert anchored_lines(FILE, anchor) == (FILE.lines[2], FILE.lines[3], FILE.lines[4])
 
@@ -179,9 +181,24 @@ def test_parse_review_migrates_a_version_1_review_by_naming_it_for_its_start() -
 
 
 def test_parse_review_reads_the_current_version_as_is() -> None:
-    current = review(summary="as written")
+    current = review(
+        comment(1, "src/app.py", 2, 2, ((LineKind.ADDED, "    return 1"),)),
+        comment(2, "src/app.py", 3, 4, ((LineKind.REMOVED, "    pass"),), side=Side.OLD),
+        summary="as written",
+    )
 
     assert parse_review(current.model_dump_json().encode()) == current
+
+
+@pytest.mark.parametrize(("side", "base_commit"), [("old", None), ("new", "abc1234")])
+def test_parse_review_refuses_an_anchor_whose_base_commit_does_not_match_its_side(
+    side: str, base_commit: str | None
+) -> None:
+    document = json.loads(review(comment(1, "src/app.py", 2, 2, ((LineKind.ADDED, "x"),))).model_dump_json())
+    document["comments"][0]["anchor"].update(side=side, base_commit=base_commit)
+
+    with pytest.raises(ValidationError, match=r"comments\.0\.anchor\.(old|new)\.base_commit"):
+        parse_review(json.dumps(document).encode())
 
 
 @pytest.mark.parametrize(
@@ -190,6 +207,8 @@ def test_parse_review_reads_the_current_version_as_is() -> None:
         (b'{"version": 3}', r"^This review is version 3, and this assess-diff reads up to version 2$"),
         (b'{"id": "x"}', r"^This review is version None, and this assess-diff reads up to version 2$"),
         (b'{"version": "1"}', r"^This review is version '1', and this assess-diff reads up to version 2$"),
+        (b'{"version": 1.0}', r"^This review is version 1\.0, and this assess-diff reads up to version 2$"),
+        (b'{"version": [1]}', r"^This review is version \[1\], and this assess-diff reads up to version 2$"),
         (b"[1, 2]", r"^A review file holds a JSON object$"),
         (b'{"version": 1, "created": 5}', r"^A review's start time is 5, not a timestamp$"),
     ],

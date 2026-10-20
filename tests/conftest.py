@@ -30,6 +30,9 @@ def hermetic_git(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keeps the developer's git config (a global ignore file, signing, aliases) out of every git the tests run."""
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # git reads `$XDG_CONFIG_HOME/git/ignore` (or `~/.config/git/ignore`) even with no global config.
+    monkeypatch.setenv("XDG_CONFIG_HOME", os.devnull)
+    monkeypatch.setenv("HOME", os.devnull)
 
 
 @dataclass(frozen=True, slots=True)

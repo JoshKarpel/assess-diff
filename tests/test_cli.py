@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -10,10 +11,14 @@ from without_cli import Streams
 from without_cli import run
 
 from assess_diff.cli import cli
+from assess_diff.cli import latest
 from assess_diff.cli import main
+from assess_diff.cli import now
+from assess_diff.cli import target_branch
 from assess_diff.cli import with_default_command
 from assess_diff.diff import BaseMode
 from assess_diff.diff import LineKind
+from assess_diff.git import find_repository
 from assess_diff.review import Review
 from assess_diff.storage import ReviewStore
 from tests.builders import STARTED
@@ -31,6 +36,11 @@ from tests.conftest import Terminal
         (["--config-home", "/c", "list"], ["--config-home", "/c", "list"]),
         (["--data-home=/d", "list"], ["--data-home=/d", "list"]),
         (["--config-home=/c", "--new"], ["--config-home=/c", "review", "--new"]),
+        (["--data-home=/d", "--config-home", "/c", "list"], ["--data-home=/d", "--config-home", "/c", "list"]),
+        (
+            ["--data-home", "/d", "--config-home=/c", "--new"],
+            ["--data-home", "/d", "--config-home=/c", "review", "--new"],
+        ),
         (["show", "abc"], ["show", "abc"]),
         (["delete", "abc"], ["delete", "abc"]),
         (["review", "--new"], ["review", "--new"]),
@@ -41,6 +51,19 @@ from tests.conftest import Terminal
 )
 def test_with_default_command_opens_the_app_unless_a_command_is_named(argv: list[str], expected: list[str]) -> None:
     assert with_default_command(argv) == expected
+
+
+def test_now_is_in_utc() -> None:
+    assert now().utcoffset() == timedelta(0)
+
+
+@pytest.mark.parametrize(("base", "expected"), [("release/9", "release/9"), (None, "main")])
+async def test_target_branch_is_the_base_given_or_else_the_default_branch(
+    scratch: Scratch, base: str | None, expected: str
+) -> None:
+    scratch.commit()
+
+    assert await target_branch(await find_repository(scratch.root), base) == expected
 
 
 @pytest.fixture
@@ -77,6 +100,22 @@ def invoke(*argv: str) -> tuple[int, str, str]:
         streams=Streams(stdin=io.StringIO(), stdout=out, stderr=err),
     )
     return code, out.getvalue(), err.getvalue()
+
+
+async def test_latest_is_this_worktrees_review_even_with_newer_ones_elsewhere(
+    project: ReviewStore, scratch: Scratch
+) -> None:
+    seed(project, scratch, "0199aaaa-mine", "mine")
+    newer = STARTED + timedelta(hours=1)
+    other_worktree = scratch.root.parent / "other-worktree"
+    other_project = scratch.root.parent / "other-project" / ".git"
+    project.save(Review.start("0199bbbb-there", scratch.root / ".git", other_worktree, "x", BaseMode.HEAD, newer), None)
+    project.save(Review.start("0199cccc-theirs", other_project, scratch.root, "y", BaseMode.HEAD, newer), None)
+
+    found = latest(project, await find_repository(scratch.root))
+
+    assert found is not None
+    assert found.review.id == "0199aaaa-mine"
 
 
 def test_list_shows_this_projects_reviews(project: ReviewStore, scratch: Scratch) -> None:
@@ -119,10 +158,11 @@ def test_delete_removes_the_review(project: ReviewStore, scratch: Scratch) -> No
     assert project.reviews() == ()
 
 
+@pytest.mark.parametrize("arguments", [["delete", "nope"], ["--review", "nope"]], ids=["named", "default"])
 def test_main_reports_an_unknown_review(
-    project: ReviewStore, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    project: ReviewStore, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], arguments: list[str]
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["assess-diff", "delete", "nope"])
+    monkeypatch.setattr(sys, "argv", ["assess-diff", *arguments])
 
     with pytest.raises(SystemExit) as exited:
         main()

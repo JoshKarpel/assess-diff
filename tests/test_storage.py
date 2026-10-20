@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -53,6 +54,14 @@ def test_save_then_load_round_trips(store: ReviewStore) -> None:
     loaded = store.load(saved.review.id)
 
     assert (loaded.review, loaded.digest) == (saved.review, saved.digest)
+
+
+def test_save_writes_json_indented_for_reading(store: ReviewStore) -> None:
+    saved = store.save(review(summary="for a person to read too"), None)
+
+    text = store.path(saved.review.id).read_text()
+
+    assert text == json.dumps(json.loads(text), indent=2)
 
 
 def test_save_writes_atomically_leaving_no_temporary_file(store: ReviewStore) -> None:

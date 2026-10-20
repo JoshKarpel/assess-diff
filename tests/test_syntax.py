@@ -70,6 +70,14 @@ def test_syntax_lines_cover_the_working_tree_and_each_hunks_removed_lines() -> N
     assert {line: text(chunks) for line, chunks in colored.items()} == {line: line.text for line in file.lines}
 
 
+def test_syntax_lines_highlight_each_hunks_removed_lines_apart() -> None:
+    opening, later = removed(2, 'x = """', hunk=0), removed(9, "y = 1", hunk=1)
+
+    colored = syntax_lines(modified("app.py", opening, later), "monokai")
+
+    assert colored == highlighted((opening,), "python", "monokai") | highlighted((later,), "python", "monokai")
+
+
 def test_syntax_lines_of_an_unknown_language_are_none() -> None:
     file = FileDiff(path="data.zzz", old_path=None, status=FileStatus.MODIFIED, lines=(added(1, "x"),), hunk_count=1)
 

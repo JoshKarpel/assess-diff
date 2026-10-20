@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from assess_diff.diff import FileDiff
 from assess_diff.diff import LineKind
 from assess_diff.diff import Side
 from assess_diff.diff import SplitRow
@@ -81,6 +82,7 @@ def test_comments_on_a_file_without_rows_go_under_its_header() -> None:
     document = build_document(diff_of(EMPTY), (ON_EMPTY,), ViewMode.UNIFIED)
 
     assert document.positions == (SummaryAt(), HeaderAt("empty.bin"), CommentAt(3))
+    assert [document.positions[stop] for stop in document.stops] == [SummaryAt(), CommentAt(3)]
 
 
 def test_split_document_pairs_rows() -> None:
@@ -179,7 +181,8 @@ def test_moved_steps_through_positions_and_stops_at_the_ends(start: Position, de
 
 def test_next_stop_goes_forward_and_wraps() -> None:
     assert [
-        next_stop(DOCUMENT, position, 1) for position in (SummaryAt(), RowAt("app.py", 2), RowAt("notes.md", 0))
+        next_stop(DOCUMENT, position, forward=True)
+        for position in (SummaryAt(), RowAt("app.py", 2), RowAt("notes.md", 0))
     ] == [
         RowAt("app.py", 1),
         CommentAt(1),
@@ -188,7 +191,9 @@ def test_next_stop_goes_forward_and_wraps() -> None:
 
 
 def test_next_stop_goes_backward_and_wraps() -> None:
-    assert [next_stop(DOCUMENT, position, -1) for position in (SummaryAt(), CommentAt(1), RowAt("app.py", 1))] == [
+    assert [
+        next_stop(DOCUMENT, position, forward=False) for position in (SummaryAt(), CommentAt(1), RowAt("app.py", 1))
+    ] == [
         RowAt("notes.md", 0),
         RowAt("app.py", 1),
         SummaryAt(),
@@ -265,11 +270,18 @@ def test_converted_keeps_the_cursor_on_the_same_line_across_views() -> None:
     ] == [RowAt("app.py", 1), RowAt("app.py", 1), RowAt("app.py", 2), RowAt("app.py", 4), HeaderAt("app.py")]
 
 
-def test_converted_from_a_file_not_in_both_documents_recovers() -> None:
-    unified = build_document(diff_of(APP), (), ViewMode.UNIFIED)
-    split = build_document(diff_of(NOTES), (), ViewMode.SPLIT)
+@pytest.mark.parametrize(
+    ("before", "after", "expected"),
+    [((APP,), (NOTES,), SummaryAt()), ((NOTES,), (APP,), RowAt("app.py", 3))],
+    ids=["only-before", "only-after"],
+)
+def test_converted_from_a_file_not_in_both_documents_recovers(
+    before: tuple[FileDiff, ...], after: tuple[FileDiff, ...], expected: Position
+) -> None:
+    unified = build_document(diff_of(*before), (), ViewMode.UNIFIED)
+    split = build_document(diff_of(*after), (), ViewMode.SPLIT)
 
-    assert converted(RowAt("app.py", 1), unified, split) == SummaryAt()
+    assert converted(RowAt("app.py", 9), unified, split) == expected
 
 
 TWO_COMMENTS = build_document(
@@ -278,7 +290,9 @@ TWO_COMMENTS = build_document(
 
 
 def test_next_comment_skips_hunks_and_wraps() -> None:
-    assert [next_comment(TWO_COMMENTS, position, 1) for position in (SummaryAt(), CommentAt(1), CommentAt(4))] == [
+    assert [
+        next_comment(TWO_COMMENTS, position, forward=True) for position in (SummaryAt(), CommentAt(1), CommentAt(4))
+    ] == [
         CommentAt(1),
         CommentAt(4),
         CommentAt(1),
@@ -286,7 +300,9 @@ def test_next_comment_skips_hunks_and_wraps() -> None:
 
 
 def test_previous_comment_skips_hunks_and_wraps() -> None:
-    assert [next_comment(TWO_COMMENTS, position, -1) for position in (RowAt("notes.md", 0), CommentAt(1))] == [
+    assert [
+        next_comment(TWO_COMMENTS, position, forward=False) for position in (RowAt("notes.md", 0), CommentAt(1))
+    ] == [
         CommentAt(1),
         CommentAt(4),
     ]
@@ -295,7 +311,7 @@ def test_previous_comment_skips_hunks_and_wraps() -> None:
 def test_next_comment_without_comments_stays_put() -> None:
     document = build_document(diff_of(APP), (), ViewMode.UNIFIED)
 
-    assert next_comment(document, RowAt("app.py", 2), 1) == RowAt("app.py", 2)
+    assert next_comment(document, RowAt("app.py", 2), forward=True) == RowAt("app.py", 2)
 
 
 def test_layout_of_a_row_in_another_document_refuses() -> None:
@@ -316,11 +332,13 @@ def test_in_mode_converts_the_cursor_or_leaves_it_without_a_document() -> None:
 
 
 def test_comment_row_is_the_row_or_header_a_comment_follows() -> None:
-    document = build_document(diff_of(EMPTY, APP), (ON_EMPTY, ON_B, ON_GONE), ViewMode.UNIFIED)
+    on_a = comment(5, "app.py", 1, 1, ((LineKind.CONTEXT, "a"),))
+    document = build_document(diff_of(EMPTY, APP), (ON_EMPTY, ON_B, ON_GONE, on_a), ViewMode.UNIFIED)
 
-    assert [comment_row(document, number) for number in (3, 1, 2, 9)] == [
+    assert [comment_row(document, number) for number in (3, 1, 5, 2, 9)] == [
         HeaderAt("empty.bin"),
         RowAt("app.py", 2),
+        RowAt("app.py", 0),
         SummaryAt(),
         SummaryAt(),
     ]

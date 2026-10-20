@@ -14,9 +14,10 @@ from assess_diff.diff import FileStatus
 from assess_diff.diff import Line
 from assess_diff.diff import LineKind
 from assess_diff.diff import Side
-from assess_diff.review import Anchor
 from assess_diff.review import Comment
 from assess_diff.review import ExcerptLine
+from assess_diff.review import NewAnchor
+from assess_diff.review import OldAnchor
 from assess_diff.review import Review
 
 BASE_COMMIT = "c0ffee0123456789c0ffee0123456789c0ffee01"
@@ -63,12 +64,10 @@ def comment(
 ) -> Comment:
     return Comment(
         number=number,
-        anchor=Anchor(
-            path=path,
-            side=side,
-            start=start,
-            end=end,
-            base_commit=BASE_COMMIT if side is Side.OLD else None,
+        anchor=(
+            OldAnchor(path=path, side=Side.OLD, start=start, end=end, base_commit=BASE_COMMIT)
+            if side is Side.OLD
+            else NewAnchor(path=path, side=Side.NEW, start=start, end=end, base_commit=None)
         ),
         excerpt=tuple(ExcerptLine(kind=kind, text=text) for kind, text in excerpt),
         body=body,

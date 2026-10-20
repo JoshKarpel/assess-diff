@@ -92,7 +92,8 @@ def runs(
     for index in range(row_count):
         is_last = index == row_count - 1
         is_block_end = (index + 1) % ROWS_PER_BLOCK == 0
-        ends = is_last or is_block_end or index in breaks or index == cursor or index + 1 == cursor
+        # The cursor's row needs no cut of its own: no other row shares its highlight.
+        ends = is_last or is_block_end or index in breaks
         if not ends and highlight(index + 1) == highlight(index):
             continue
         found.append(Run(start, index + 1, highlight(index)))

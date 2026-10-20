@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from watchfiles import Change
 
+from assess_diff.diff import Base
 from assess_diff.diff import BaseMode
 from assess_diff.diff import FileStatus
 from assess_diff.diff import LineKind
@@ -66,6 +67,18 @@ async def test_git_failure_names_the_command_and_what_git_said(scratch: Scratch)
         await git(scratch.root, "rev-parse", "--verify", "nonsense")
 
 
+async def test_git_failure_replaces_bytes_in_stderr_that_are_not_utf8(scratch: Scratch) -> None:
+    scratch.commit()
+
+    with pytest.raises(GitError, match=r"^git show no\udcffpe failed: fatal: ambiguous argument 'no\ufffdpe': unknown"):
+        await git(scratch.root, "show", os.fsdecode(b"no\xffpe"))
+
+
+async def test_git_without_stdin_gives_git_an_empty_one(scratch: Scratch) -> None:
+    # The empty blob's id, which every SHA-1 repository shares.
+    assert await git(scratch.root, "hash-object", "--stdin") == "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391\n"
+
+
 async def test_default_branch_follows_origin_head(scratch: Scratch, tmp_path: Path) -> None:
     scratch.commit()
     scratch.git("branch", "trunk")
@@ -92,8 +105,26 @@ async def test_default_branch_with_nothing_to_go_on_asks_for_one(tmp_path: Path)
     scratch.git("checkout", "--quiet", "-b", "feature")
     scratch.commit()
 
+    with pytest.raises(GitError, match=r"^Can't tell which branch this one merges into; pass it with --base$"):
+        await default_branch(await find_repository(scratch.root))
+
+
+async def test_default_branch_is_not_a_file_named_like_a_branch_ref(tmp_path: Path) -> None:
+    scratch = init_scratch(tmp_path / "repo")
+    scratch.git("checkout", "--quiet", "-b", "feature")
+    scratch.write("refs/heads/main", "not a branch\n")
+    scratch.commit()
+
     with pytest.raises(GitError, match="pass it with --base"):
         await default_branch(await find_repository(scratch.root))
+
+
+async def test_head_base_is_the_last_commit(scratch: Scratch) -> None:
+    scratch.commit("first")
+    last = scratch.commit("last")
+    repository = await find_repository(scratch.root)
+
+    assert await resolve_base(repository, BaseMode.HEAD, "trunk") == Base(mode=BaseMode.HEAD, commit=last, label="HEAD")
 
 
 async def test_merge_base_is_where_the_branch_left_its_target(scratch: Scratch) -> None:
@@ -234,6 +265,80 @@ async def test_diff_rows_ignore_a_textconv_driver(scratch: Scratch) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("color.diff", "always"),
+        ("diff.external", "echo external"),
+        ("diff.renames", "false"),
+        ("diff.noprefix", "true"),
+    ],
+)
+async def test_compute_diff_is_unaffected_by_the_repositorys_diff_config(
+    scratch: Scratch, key: str, value: str
+) -> None:
+    scratch.write("gone.txt", "gone\n")
+    scratch.write("kept.txt", "same\nold\n")
+    scratch.write("old.txt", "moved\nintact\n")
+    scratch.commit()
+    scratch.git("config", key, value)
+    (scratch.root / "gone.txt").unlink()
+    scratch.write("kept.txt", "same\nnew\n")
+    scratch.git("mv", "old.txt", "new.txt")
+    repository = await find_repository(scratch.root)
+
+    diff = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))
+
+    assert [
+        (file.path, file.old_path, file.status, [(line.kind, line.text) for line in file.lines]) for file in diff.files
+    ] == [
+        ("gone.txt", None, FileStatus.DELETED, [(LineKind.REMOVED, "gone")]),
+        (
+            "kept.txt",
+            None,
+            FileStatus.MODIFIED,
+            [(LineKind.CONTEXT, "same"), (LineKind.REMOVED, "old"), (LineKind.ADDED, "new")],
+        ),
+        ("new.txt", "old.txt", FileStatus.RENAMED, [(LineKind.CONTEXT, "moved"), (LineKind.CONTEXT, "intact")]),
+    ]
+
+
+async def test_compute_diff_carries_on_past_binary_and_deleted_files(scratch: Scratch) -> None:
+    scratch.write("a.dat", b"\0before")
+    scratch.write("b.txt", "deleted\n")
+    scratch.write("c.txt", "before\n")
+    scratch.commit()
+    scratch.write("a.dat", b"\0after")
+    (scratch.root / "b.txt").unlink()
+    scratch.write("c.txt", "after\n")
+    scratch.write("d.txt", "untracked\n")
+    repository = await find_repository(scratch.root)
+
+    diff = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))
+
+    assert [(file.path, file.status, file.placeholder, file.additions, file.deletions) for file in diff.files] == [
+        ("a.dat", FileStatus.MODIFIED, "Binary file", 0, 0),
+        ("b.txt", FileStatus.DELETED, None, 0, 1),
+        ("c.txt", FileStatus.MODIFIED, None, 1, 1),
+        ("d.txt", FileStatus.UNTRACKED, None, 1, 0),
+    ]
+
+
+async def test_compute_diff_keeps_a_path_that_is_not_utf8(scratch: Scratch) -> None:
+    path = os.fsdecode(b"caf\xe9.txt")
+    scratch.write(path, "before\n")
+    scratch.commit()
+    scratch.write(path, "after\n")
+    repository = await find_repository(scratch.root)
+
+    (file,) = (await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))).files
+
+    assert (file.path, [(line.kind, line.text) for line in file.lines]) == (
+        path,
+        [(LineKind.REMOVED, "before"), (LineKind.ADDED, "after")],
+    )
+
+
 def test_read_lines_of_invalid_utf8_is_binary(tmp_path: Path) -> None:
     (tmp_path / "f").write_bytes(b"\xff\xfe")
 
@@ -268,6 +373,23 @@ async def test_ignored_asks_git_which_paths_it_ignores(scratch: Scratch) -> None
     paths = frozenset(scratch.root / name for name in ("debug.log", "build/out.o", "src/app.py", "tracked.log"))
 
     assert await ignored(repository, paths) == {scratch.root / "debug.log", scratch.root / "build/out.o"}
+
+
+async def test_ignored_when_git_ignores_none_of_the_paths_is_empty(scratch: Scratch) -> None:
+    scratch.write(".gitignore", "*.log\n")
+    scratch.commit()
+    repository = await find_repository(scratch.root)
+
+    assert await ignored(repository, frozenset({scratch.root / "app.py", scratch.root / "notes.txt"})) == frozenset()
+
+
+async def test_ignored_passes_a_path_that_is_not_utf8_through_git(scratch: Scratch) -> None:
+    scratch.write(".gitignore", "*.log\n")
+    scratch.commit()
+    repository = await find_repository(scratch.root)
+    path = scratch.root / os.fsdecode(b"caf\xe9.log")
+
+    assert await ignored(repository, frozenset({path, scratch.root / "app.py"})) == {path}
 
 
 async def test_ignored_of_no_paths_is_none(scratch: Scratch) -> None:

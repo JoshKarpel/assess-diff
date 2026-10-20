@@ -180,23 +180,13 @@ def unquote_path(path: str) -> str:
     return out.decode()
 
 
-def strip_prefix(path: str) -> str | None:
-    """
-    A `---`/`+++` header's path without its `a/` or `b/` prefix, or `None` for `/dev/null`.
-    git ends the header with a tab when the path holds a space, for GNU patch's sake.
-    """
-    path = path.removesuffix("\t")
-    if path == "/dev/null":
-        return None
-    return unquote_path(path)[2:]
-
-
 def parse_diff(text: str) -> tuple[FileChange, ...]:
     """
     Parse the output of `git diff -U0 --no-color --no-ext-diff --no-textconv -M --src-prefix=a/ --dst-prefix=b/`.
 
-    Paths come from the `---`/`+++` and `rename from`/`rename to` headers,
-    which hold one path each, rather than from the `diff --git` line, where a path with a space in it is ambiguous.
+    A renamed file's paths come from its `rename from`/`rename to` headers; every other file's from its
+    `diff --git` line (see `header_path`), which, unlike the `---`/`+++` headers, a binary file and a pure mode
+    change have too.
     """
     return tuple(parse_file(block) for block in file_blocks(text.splitlines()))
 
@@ -214,8 +204,6 @@ def file_blocks(lines: list[str]) -> Iterator[list[str]]:
 
 
 def parse_file(block: list[str]) -> FileChange:
-    old_path: str | None = None
-    new_path: str | None = None
     rename_from: str | None = None
     rename_to: str | None = None
     is_new = is_deleted = is_binary = False
@@ -232,10 +220,6 @@ def parse_file(block: list[str]) -> FileChange:
             rename_from = unquote_path(line.removeprefix("rename from "))
         elif line.startswith("rename to "):
             rename_to = unquote_path(line.removeprefix("rename to "))
-        elif line.startswith("--- "):
-            old_path = strip_prefix(line.removeprefix("--- "))
-        elif line.startswith("+++ "):
-            new_path = strip_prefix(line.removeprefix("+++ "))
         elif line.startswith("Binary files "):
             is_binary = True
         index += 1
@@ -263,7 +247,7 @@ def parse_file(block: list[str]) -> FileChange:
             index += 1
         hunks.append(Hunk(old_start, old_count, new_start, new_count, tuple(removed), tuple(added)))
 
-    path = rename_to or new_path or old_path or binary_path(block[0])
+    path = header_path(block[0]) if rename_to is None else rename_to
     if is_new:
         status = FileStatus.ADDED
     elif is_deleted:
@@ -281,16 +265,17 @@ def parse_file(block: list[str]) -> FileChange:
     )
 
 
-def binary_path(header: str) -> str:
+def header_path(header: str) -> str:
     """
-    The path of a file whose diff has no `---`/`+++` headers, a binary file or a pure mode change,
-    from its `diff --git a/<path> b/<path>` line, where both halves are the same path.
+    The path in an unrenamed file's `diff --git a/<path> b/<path>` line. Both halves are the same path,
+    so an unquoted line splits at its middle even when the path holds a space, or ` b/`.
     """
     body = header.removeprefix("diff --git ")
     if body.startswith('"'):
-        end = body.index('"', 1)
-        while body[end - 1] == "\\":
-            end = body.index('"', end + 1)
+        # Step over each escape whole: the quote in `\\"` closes the path, the one in `\"` doesn't.
+        end = 1
+        while body[end] != '"':
+            end += 2 if body[end] == "\\" else 1
         return unquote_path(body[: end + 1])[2:]
     half = (len(body) - 1) // 2
     return body[2:half]
@@ -334,6 +319,11 @@ def added_file(path: str, new_lines: tuple[str, ...], status: FileStatus = FileS
     """A file that exists only in the working tree, such as an untracked one: every line added, in one hunk."""
     lines = tuple(Line(LineKind.ADDED, None, number, text, hunk=0) for number, text in enumerate(new_lines, start=1))
     return FileDiff(path=path, old_path=None, status=status, lines=lines, hunk_count=1 if lines else 0)
+
+
+def untracked_placeholder(path: str, reason: str) -> FileDiff:
+    """An untracked file shown by `reason` instead of its lines, such as one that isn't text."""
+    return FileDiff(path=path, old_path=None, status=FileStatus.UNTRACKED, lines=(), hunk_count=0, placeholder=reason)
 
 
 def placeholder_file(change: FileChange, reason: str) -> FileDiff:

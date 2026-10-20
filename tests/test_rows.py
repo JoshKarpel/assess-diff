@@ -5,10 +5,14 @@ from counterweight.elements import Chunk
 from counterweight.styles import CellStyle
 from counterweight.styles.utilities import text_color
 
+from assess_diff.diff import LineKind
 from assess_diff.diff import SplitRow
 from assess_diff.ui.rows import ABSENT
 from assess_diff.ui.rows import BACKGROUNDS
+from assess_diff.ui.rows import DIVIDER
+from assess_diff.ui.rows import GUTTER
 from assess_diff.ui.rows import HIGHLIGHTS
+from assess_diff.ui.rows import MARKER_COLORS
 from assess_diff.ui.rows import Highlight
 from assess_diff.ui.rows import SyntaxLines
 from assess_diff.ui.rows import digits_for
@@ -22,6 +26,16 @@ from tests.builders import context
 from tests.builders import removed
 
 RED = text_color("red", 300).text_style
+
+
+@pytest.fixture(autouse=True)
+def cold_row_caches() -> None:
+    """
+    Empties the row caches, so each test draws its rows rather than reading back another test's:
+    mutmut runs each mutant in a process forked after the whole suite has warmed them.
+    """
+    unified_chunks.cache_clear()
+    split_chunks.cache_clear()
 
 
 def text_of(chunks: tuple[Chunk, ...]) -> str:
@@ -40,18 +54,22 @@ def test_displayed_expands_tabs_and_drops_a_trailing_carriage_return() -> None:
         ((Chunk(content="ab"), Chunk(content="cdef")), 4, "abc…"),
         ((Chunk(content="日本語"),), 4, "日 …"),
         ((Chunk(content="abcdef"),), 1, "…"),
+        ((Chunk(content="abcdef"),), 0, ""),
+        ((), 0, ""),
     ],
 )
 def test_fitted_pads_or_cuts_to_exactly_the_width(chunks: tuple[Chunk, ...], width: int, expected: str) -> None:
     assert text_of(fitted(chunks, width, BACKGROUNDS[added(1, "").kind])) == expected
 
 
-def test_fitted_keeps_each_kept_pieces_style() -> None:
+@pytest.mark.parametrize(("width", "kept", "end"), [(7, "cdef", " "), (4, "c", "…")])
+def test_fitted_keeps_each_pieces_style_and_pads_or_cuts_in_the_given_style(width: int, kept: str, end: str) -> None:
     chunks = (Chunk(content="ab", style=RED), Chunk(content="cdef"))
 
-    assert fitted(chunks, 4, BACKGROUNDS[added(1, "").kind])[:2] == (
+    assert fitted(chunks, width, BACKGROUNDS[LineKind.ADDED]) == (
         Chunk(content="ab", style=RED),
-        Chunk(content="c"),
+        Chunk(content=kept),
+        Chunk(content=end, style=BACKGROUNDS[LineKind.ADDED]),
     )
 
 
@@ -80,6 +98,32 @@ def test_split_row_puts_old_numbers_left_and_new_numbers_right() -> None:
     assert text_of(split_chunks(SplitRow(line, line), None, None, 3, 31, Highlight.NONE)) == (
         "  4   same     │  6   same     "
     )
+
+
+def test_split_row_styles_each_sides_gutter_marker_and_text_and_fits_the_text_to_its_half() -> None:
+    old, new = removed(4, "ab"), added(6, "cdefgh")
+    old_background = BACKGROUNDS[old.kind] | HIGHLIGHTS[Highlight.CURSOR]
+    new_background = BACKGROUNDS[new.kind] | HIGHLIGHTS[Highlight.CURSOR]
+
+    chunks = split_chunks(SplitRow(old, new), None, None, 3, 21, Highlight.CURSOR)
+
+    assert chunks == (
+        Chunk(content="  4 ", style=GUTTER | old_background),
+        Chunk(content="- ", style=MARKER_COLORS[old.kind] | old_background),
+        Chunk(content="ab", style=old_background),
+        Chunk(content="  ", style=old_background),
+        Chunk(content="│", style=DIVIDER),
+        Chunk(content="  6 ", style=GUTTER | new_background),
+        Chunk(content="+ ", style=MARKER_COLORS[new.kind] | new_background),
+        Chunk(content="cde", style=new_background),
+        Chunk(content="…", style=new_background),
+    )
+
+
+def test_split_row_exactly_as_wide_as_its_gutters_and_markers_leaves_no_cells_for_text() -> None:
+    line = context(4, 6, "")
+
+    assert text_of(split_chunks(SplitRow(line, line), None, None, 3, 13, Highlight.NONE)) == "  4   │  6   "
 
 
 def test_split_row_with_one_side_blank_fills_it() -> None:

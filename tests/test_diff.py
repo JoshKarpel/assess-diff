@@ -11,6 +11,7 @@ from hypothesis import strategies as st
 from assess_diff.diff import Base
 from assess_diff.diff import BaseMode
 from assess_diff.diff import Diff
+from assess_diff.diff import FileChange
 from assess_diff.diff import FileDiff
 from assess_diff.diff import FileStatus
 from assess_diff.diff import Hunk
@@ -18,10 +19,13 @@ from assess_diff.diff import Line
 from assess_diff.diff import LineKind
 from assess_diff.diff import SplitRow
 from assess_diff.diff import added_file
-from assess_diff.diff import binary_path
+from assess_diff.diff import build_lines
+from assess_diff.diff import header_path
 from assess_diff.diff import parse_diff
+from assess_diff.diff import placeholder_file
 from assess_diff.diff import split_rows
 from assess_diff.diff import unquote_path
+from assess_diff.diff import untracked_placeholder
 from assess_diff.git import compute_diff
 from assess_diff.git import find_repository
 from assess_diff.git import resolve_base
@@ -183,8 +187,9 @@ async def test_rows_rebuild_both_versions_with_consecutive_numbers(old: list[str
     assert [line.new for line in lines if line.new is not None] == list(range(1, len(new) + 1))
 
 
-def test_unquote_path_leaves_an_unquoted_path_alone() -> None:
-    assert unquote_path("plain/path.py") == "plain/path.py"
+@pytest.mark.parametrize("path", ["plain/path.py", '"leading/quote.py', 'trailing/quote.py"'])
+def test_unquote_path_leaves_a_path_not_wrapped_in_quotes_alone(path: str) -> None:
+    assert unquote_path(path) == path
 
 
 def test_unquote_path_decodes_named_escapes() -> None:
@@ -197,10 +202,80 @@ def test_unquote_path_decodes_named_escapes() -> None:
         ("diff --git a/img.dat b/img.dat", "img.dat"),
         ("diff --git a/with space.dat b/with space.dat", "with space.dat"),
         ('diff --git "a/qu\\"ote.dat" "b/qu\\"ote.dat"', 'qu"ote.dat'),
+        ("diff --git a/x b/y.dat b/x b/y.dat", "x b/y.dat"),
+        ('diff --git "a/say\\"" "b/say\\""', 'say"'),
+        ('diff --git "a/new\\\\" "b/new\\\\"', "new\\"),
+        ('diff --git "a/two\\\\\\"" "b/two\\\\\\""', 'two\\"'),
     ],
 )
-def test_binary_path_reads_the_path_from_the_diff_git_line(header: str, path: str) -> None:
-    assert binary_path(header) == path
+def test_header_path_reads_the_path_from_the_diff_git_line(header: str, path: str) -> None:
+    assert header_path(header) == path
+
+
+@pytest.mark.parametrize(
+    ("lines", "change"),
+    [
+        pytest.param(
+            [
+                "diff --git a/before.py b/after.py",
+                "similarity index 100%",
+                "rename from before.py",
+                "rename to after.py",
+            ],
+            FileChange(path="after.py", old_path="before.py", status=FileStatus.RENAMED, is_binary=False, hunks=()),
+            id="pure rename",
+        ),
+        pytest.param(
+            [
+                r'diff --git "a/new\\" "b/new\\"',
+                "new file mode 100644",
+                "index 0000000..92d5444",
+                "--- /dev/null",
+                r'+++ "b/new\\"',
+                "@@ -0,0 +1 @@",
+                "+fresh",
+            ],
+            FileChange(
+                path="new\\",
+                old_path=None,
+                status=FileStatus.ADDED,
+                is_binary=False,
+                hunks=(Hunk(0, 0, 1, 1, (), ("fresh",)),),
+            ),
+            id="added",
+        ),
+        pytest.param(
+            [
+                r'diff --git "a/old\\" "b/old\\"',
+                "deleted file mode 100644",
+                "index 286c5f5..0000000",
+                r'--- "a/old\\"',
+                "+++ /dev/null",
+                "@@ -1 +0,0 @@",
+                "-gone",
+            ],
+            FileChange(
+                path="old\\",
+                old_path=None,
+                status=FileStatus.DELETED,
+                is_binary=False,
+                hunks=(Hunk(1, 1, 0, 0, ("gone",), ()),),
+            ),
+            id="deleted",
+        ),
+        pytest.param(
+            [
+                r'diff --git "a/say\"" "b/say\""',
+                "index bdc955b..8835708 100644",
+                r'Binary files "a/say\"" and "b/say\"" differ',
+            ],
+            FileChange(path='say"', old_path=None, status=FileStatus.MODIFIED, is_binary=True, hunks=()),
+            id="binary",
+        ),
+    ],
+)
+def test_parse_diff_reads_each_file_header(lines: list[str], change: FileChange) -> None:
+    assert parse_diff("\n".join(lines) + "\n") == (change,)
 
 
 def test_parse_diff_reads_a_hunk_header_without_counts_as_one_line() -> None:
@@ -265,6 +340,58 @@ def test_split_rows_start_a_new_pair_when_removals_follow_additions() -> None:
 
 def test_added_file_with_no_lines_has_no_hunks() -> None:
     assert added_file("empty.txt", ()).hunk_count == 0
+
+
+def test_added_file_is_one_hunk_of_every_line() -> None:
+    assert added_file("notes.md", ("alpha", "beta")) == FileDiff(
+        path="notes.md",
+        old_path=None,
+        status=FileStatus.UNTRACKED,
+        lines=(Line(LineKind.ADDED, None, 1, "alpha", hunk=0), Line(LineKind.ADDED, None, 2, "beta", hunk=0)),
+        hunk_count=1,
+    )
+
+
+def test_placeholder_file_keeps_the_change_but_none_of_its_lines() -> None:
+    change = FileChange(
+        path="new.bin",
+        old_path="old.bin",
+        status=FileStatus.RENAMED,
+        is_binary=True,
+        hunks=(Hunk(4, 2, 4, 3, ("a", "b"), ("c", "d", "e")),),
+    )
+
+    assert placeholder_file(change, "Binary file") == FileDiff(
+        path="new.bin",
+        old_path="old.bin",
+        status=FileStatus.RENAMED,
+        lines=(),
+        hunk_count=0,
+        placeholder="Binary file",
+    )
+
+
+def test_untracked_placeholder_is_the_file_with_a_reason_instead_of_lines() -> None:
+    assert untracked_placeholder("blob.dat", "File too large to show") == FileDiff(
+        path="blob.dat",
+        old_path=None,
+        status=FileStatus.UNTRACKED,
+        lines=(),
+        hunk_count=0,
+        placeholder="File too large to show",
+    )
+
+
+def test_build_lines_numbers_each_hunk_from_its_header_when_the_file_shrank_after_the_diff() -> None:
+    # The working tree can change between `git diff` and reading the file, leaving fewer lines than the hunks expect.
+    hunks = (Hunk(old_start=6, old_count=1, new_start=5, new_count=1, removed=("old",), added=("new",)),)
+
+    assert build_lines(hunks, ("a", "b")) == (
+        Line(LineKind.CONTEXT, 1, 1, "a"),
+        Line(LineKind.CONTEXT, 2, 2, "b"),
+        Line(LineKind.REMOVED, 6, None, "old", hunk=0),
+        Line(LineKind.ADDED, None, 5, "new", hunk=0),
+    )
 
 
 def test_file_diff_counts_its_additions_and_deletions() -> None:

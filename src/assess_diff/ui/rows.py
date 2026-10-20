@@ -7,6 +7,7 @@ and only the cursor's and the selection's change.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from enum import StrEnum
 from functools import lru_cache
 from itertools import accumulate
@@ -74,9 +75,11 @@ def fitted(chunks: tuple[Chunk, ...], width: int, style: Style) -> tuple[Chunk, 
     """
     if (current := chunks_width(chunks)) <= width:
         return (*chunks, Chunk(content=" " * (width - current), style=style))
+    if width == 0:
+        return ()
     cells = [(grapheme, chunk.style) for chunk in chunks for grapheme in graphemes(chunk.content)]
-    ends = accumulate(grapheme_width(grapheme) for grapheme, _ in cells)
-    kept = [cell for cell, end in zip(cells, ends, strict=True) if end <= width - 1]
+    # Cell ends only grow, so the cells that fit before the `…` are a prefix.
+    kept = cells[: bisect_right(tuple(accumulate(grapheme_width(grapheme) for grapheme, _ in cells)), width - 1)]
     used = sum(grapheme_width(grapheme) for grapheme, _ in kept)
     pieces = tuple(
         Chunk(content="".join(grapheme for grapheme, _ in group), style=piece_style)
@@ -179,5 +182,4 @@ def row_chunks(
 
 def digits_for(lines: tuple[Line, ...]) -> int:
     """How many digits the gutter's line numbers take in a file: its largest number's, and at least three."""
-    largest = max((max(line.old or 0, line.new or 0) for line in lines), default=0)
-    return max(3, len(str(largest)))
+    return max([3, *(len(str(number)) for line in lines for number in (line.old, line.new) if number is not None)])

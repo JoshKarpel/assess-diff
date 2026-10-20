@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from counterweight.autopilot import WaitFor
 from counterweight.controls import CopyToClipboard
+from counterweight.elements import Chunk
 from counterweight.events import KeyPressed
+from counterweight.focus import FocusHandle
 from counterweight.keys import Key
+from counterweight.styles.utilities import text_bold
+from counterweight.styles.utilities import text_color
 
 from assess_diff.diff import BaseMode
+from assess_diff.diff import Diff
 from assess_diff.diff import LineKind
 from assess_diff.diff import Side
 from assess_diff.export import to_markdown
@@ -17,12 +23,25 @@ from assess_diff.navigation import ViewMode
 from assess_diff.navigation import build_document
 from assess_diff.preferences import PreferencesFile
 from assess_diff.review import ExcerptLine
+from assess_diff.review import Review
 from assess_diff.review import edit_summary
 from assess_diff.storage import OpenReview
 from assess_diff.storage import ReviewStore
+from assess_diff.ui.app import INITIAL_SESSION
+from assess_diff.ui.app import Managing
+from assess_diff.ui.app import Naming
+from assess_diff.ui.app import PickingTheme
+from assess_diff.ui.app import Session
 from assess_diff.ui.app import copied
+from assess_diff.ui.app import key_hints
+from assess_diff.ui.app import other_base
+from assess_diff.ui.app import status_line
+from assess_diff.ui.theme_picker import Query
+from tests.builders import added
 from tests.builders import comment
 from tests.builders import diff_of
+from tests.builders import modified
+from tests.builders import removed
 from tests.builders import review
 from tests.conftest import Scratch
 from tests.harness import HEIGHT
@@ -580,6 +599,96 @@ def test_copying_cites_the_diff() -> None:
 
     assert notice == f"Copied review “{review().name}” to the clipboard as Markdown"
     assert control == CopyToClipboard(to_markdown(review(), diff_of()))
+
+
+@pytest.mark.parametrize(
+    ("mode", "other"),
+    [(BaseMode.HEAD, BaseMode.MERGE_BASE), (BaseMode.MERGE_BASE, BaseMode.HEAD)],
+    ids=["head", "merge-base"],
+)
+def test_other_base_switches_between_the_two_bases(mode: BaseMode, other: BaseMode) -> None:
+    assert other_base(mode) is other
+
+
+def status_chunks(branch: str, against: str, counts: str) -> tuple[Chunk, ...]:
+    return (
+        Chunk(content=branch, style=text_bold),
+        Chunk(content=against, style=text_color("slate", 300)),
+        Chunk(content=counts, style=text_color("slate", 400)),
+    )
+
+
+FIRST = comment(1, "a.py", 2, 2, ((LineKind.ADDED, "two"),))
+SECOND = comment(2, "b.py", 5, 5, ((LineKind.REMOVED, "five"),), side=Side.OLD)
+CHANGED_FILES = (
+    modified("a.py", removed(2, "zwei"), added(2, "two")),
+    modified("b.py", removed(5, "five")),
+)
+
+
+@pytest.mark.parametrize(
+    ("reviewed", "diff", "mode", "expected"),
+    [
+        (
+            review(branch=None),
+            None,
+            ViewMode.UNIFIED,
+            status_chunks(" detached HEAD ", "reading the diff…", "    0 comments  unified"),
+        ),
+        (
+            review(FIRST, branch="topic/one"),
+            diff_of(CHANGED_FILES[0], mode=BaseMode.HEAD, label="HEAD"),
+            ViewMode.SPLIT,
+            status_chunks(" topic/one ", "against HEAD c0ffee0", "  1 file  1 comment  split"),
+        ),
+        (
+            review(FIRST, SECOND, branch="feature/x"),
+            diff_of(*CHANGED_FILES, mode=BaseMode.MERGE_BASE, label="trunk"),
+            ViewMode.UNIFIED,
+            status_chunks(" feature/x ", "against trunk (merge base c0ffee0)", "  2 files  2 comments  unified"),
+        ),
+    ],
+    ids=["loading-detached", "head", "merge-base"],
+)
+def test_status_line_says_the_branch_the_base_and_the_counts(
+    reviewed: Review, diff: Diff | None, mode: ViewMode, expected: tuple[Chunk, ...]
+) -> None:
+    assert status_line(reviewed, diff, mode) == expected
+
+
+HANDLE = FocusHandle()
+
+
+@pytest.mark.parametrize(
+    ("session", "hints"),
+    [
+        (
+            INITIAL_SESSION,
+            " ↑↓ move  ⇧↑↓ select  tab hunk/comment  n/N comment  enter comment  dd delete  r summary  e rename"
+            "  s split  b base  t theme  f files  o reviews  c copy  q quit",
+        ),
+        (replace(INITIAL_SESSION, naming=Naming(HANDLE, "draft")), " enter rename  esc keep the old name"),
+        (
+            replace(INITIAL_SESSION, managing=Managing(HANDLE, ())),
+            " ↑↓ choose  enter open  e rename  dd delete  esc close",
+        ),
+        (
+            replace(INITIAL_SESSION, picking_theme=PickingTheme(HANDLE, Query(text="mono", highlighted=2))),
+            " type to filter  ↑↓ preview  enter keep  esc revert",
+        ),
+        (
+            replace(INITIAL_SESSION, editing=(3, HANDLE)),
+            " esc done  (everything you type is saved as you type it)",
+        ),
+        (
+            replace(INITIAL_SESSION, confirming_delete=7),
+            " press d again to delete #7, anything else to keep it",
+        ),
+    ],
+    ids=["diff", "naming", "managing", "picking-theme", "editing", "confirming-delete"],
+)
+def test_key_hints_list_the_keys_of_what_has_focus(session: Session, hints: str) -> None:
+    assert key_hints(session) == hints
 
 
 async def test_writing_the_summary_keeps_the_cursor_where_it_was(harness: Harness) -> None:

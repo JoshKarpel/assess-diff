@@ -31,12 +31,21 @@ def test_load_without_a_file_is_the_defaults(tmp_path: Path) -> None:
 
 
 def test_save_then_load_round_trips(tmp_path: Path) -> None:
-    file = PreferencesFile(tmp_path / "nested" / "preferences.json")
+    # Two directories that don't exist yet, as `~/.config/assess-diff` on a machine without `~/.config`.
+    file = PreferencesFile(tmp_path / "config" / "assess-diff" / "preferences.json")
     chosen = Preferences(version=1, view_mode=ViewMode.SPLIT, theme="monokai")
 
     file.save(chosen)
 
     assert (file.load(), sorted(path.name for path in file.path.parent.iterdir())) == (chosen, ["preferences.json"])
+
+
+def test_save_writes_json_indented_for_reading(tmp_path: Path) -> None:
+    file = PreferencesFile(tmp_path / "preferences.json")
+
+    file.save(Preferences(version=1, view_mode=ViewMode.SPLIT, theme="monokai"))
+
+    assert file.path.read_text() == '{\n  "version": 1,\n  "view_mode": "split",\n  "theme": "monokai"\n}'
 
 
 def test_an_unknown_theme_fails_to_parse() -> None:

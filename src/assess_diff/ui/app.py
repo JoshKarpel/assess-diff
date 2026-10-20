@@ -399,13 +399,13 @@ def assess_app(
             case KeyPressed(key=Key.End):
                 return go(document.positions[-1])
             case KeyPressed(key=Key.Tab):
-                return go(next_stop(document, cursor, 1), block="center")
+                return go(next_stop(document, cursor, forward=True), block="center")
             case KeyPressed(key=Key.BackTab):
-                return go(next_stop(document, cursor, -1), block="center")
+                return go(next_stop(document, cursor, forward=False), block="center")
             case KeyPressed(key="n"):
-                return go(next_comment(document, cursor, 1), block="center")
+                return go(next_comment(document, cursor, forward=True), block="center")
             case KeyPressed(key="N"):
-                return go(next_comment(document, cursor, -1), block="center")
+                return go(next_comment(document, cursor, forward=False), block="center")
             case KeyPressed(key=Key.ShiftDown | Key.ShiftUp | "J" | "K") if isinstance(cursor, RowAt):
                 delta = 1 if event.key in (Key.ShiftDown, "J") else -1
                 anchor = selection or cursor

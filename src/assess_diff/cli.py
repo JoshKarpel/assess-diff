@@ -93,8 +93,14 @@ async def target_branch(repository: Repository, base: str | None) -> str | None:
 
 def latest(store: ReviewStore, repository: Repository) -> Stored | None:
     """The current worktree's most recently updated review, if it has one."""
-    mine = for_project(store.reviews(), repository.common_dir, repository.worktree)
-    found = next((review for review in mine if review.worktree == repository.worktree), None)
+    found = next(
+        (
+            review
+            for review in store.reviews()
+            if review.project == repository.common_dir and review.worktree == repository.worktree
+        ),
+        None,
+    )
     return None if found is None else store.load(found.id)
 
 

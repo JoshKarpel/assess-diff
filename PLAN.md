@@ -368,7 +368,7 @@ with each equivalent survivor written down beside why no test can catch it.
    view and base toggles, the theme picker, the review manager, copying.
    Tests drive it headless with counterweight's autopilot.
 9. **CLI.** The subcommands above.
-10. **Mutation testing** over everything, with equivalent survivors recorded in `docs/mutation-testing.md`.
+10. **Mutation testing** over everything, with equivalent survivors recorded in the `mutation-testing` project skill.
 
 ## Later
 

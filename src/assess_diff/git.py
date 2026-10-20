@@ -20,6 +20,7 @@ from assess_diff.diff import added_file
 from assess_diff.diff import file_diff
 from assess_diff.diff import parse_diff
 from assess_diff.diff import placeholder_file
+from assess_diff.diff import untracked_placeholder
 
 # Past this, a file's content isn't shown: an agent's stray log or build output would swamp the view.
 MAX_FILE_BYTES = 1024 * 1024
@@ -211,12 +212,7 @@ def read_files(worktree: Path, changes: tuple[FileChange, ...], untracked: tuple
     for path in untracked:
         match read_lines(worktree / path):
             case str() as reason:
-                files.append(
-                    placeholder_file(
-                        FileChange(path=path, old_path=None, status=FileStatus.UNTRACKED, is_binary=False, hunks=()),
-                        reason,
-                    )
-                )
+                files.append(untracked_placeholder(path, reason))
             case lines:
                 files.append(added_file(path, lines))
     return files

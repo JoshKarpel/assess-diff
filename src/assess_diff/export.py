@@ -11,10 +11,11 @@ from typing import assert_never
 from assess_diff.diff import BaseMode
 from assess_diff.diff import Diff
 from assess_diff.diff import LineKind
-from assess_diff.diff import Side
 from assess_diff.review import Anchor
 from assess_diff.review import Comment
 from assess_diff.review import ExcerptLine
+from assess_diff.review import NewAnchor
+from assess_diff.review import OldAnchor
 from assess_diff.review import Review
 from assess_diff.review import is_outdated
 
@@ -48,13 +49,12 @@ def location(anchor: Anchor) -> str:
     `path:line` or `path:start-end` for the working tree's lines, and a note naming the base for removed ones.
     """
     lines = str(anchor.start) if anchor.start == anchor.end else f"{anchor.start}-{anchor.end}"
-    match anchor.side:
-        case Side.NEW:
+    match anchor:
+        case NewAnchor():
             return f"`{anchor.path}:{lines}`"
-        case Side.OLD:
+        case OldAnchor():
             line_word = "line" if anchor.start == anchor.end else "lines"
-            commit = (anchor.base_commit or "")[:7]
-            return f"`{anchor.path}`, removed {line_word} {lines} (in `{commit}`)"
+            return f"`{anchor.path}`, removed {line_word} {lines} (in `{anchor.base_commit[:7]}`)"
         case _ as unreachable:
             assert_never(unreachable)
 

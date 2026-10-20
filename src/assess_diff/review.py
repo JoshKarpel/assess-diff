@@ -12,10 +12,12 @@ from collections.abc import Callable
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
 from typing import Literal
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
+from pydantic import Field
 
 from assess_diff.diff import BaseMode
 from assess_diff.diff import Diff
@@ -25,19 +27,38 @@ from assess_diff.diff import LineKind
 from assess_diff.diff import Side
 
 
-class Anchor(BaseModel):
+class NewAnchor(BaseModel):
     """
-    Where a comment points: a range of lines on one side of one file, as GitHub's `start_line`, `line` and `side` do.
-    `base_commit` is the commit the old side's numbers count in, since they change with the base.
+    Where a comment on the working tree's lines points: a range of lines in one file,
+    as GitHub's `start_line`, `line` and `side` do.
     """
 
     model_config = ConfigDict(frozen=True)
 
     path: str
-    side: Side
+    side: Literal[Side.NEW]
     start: int
     end: int
-    base_commit: str | None
+    # Always null; kept so both kinds of anchor are written in one shape.
+    base_commit: None
+
+
+class OldAnchor(BaseModel):
+    """
+    Where a comment on removed lines points: a range of the base's lines in one file.
+    `base_commit` is the commit those numbers count in, since they change with the base.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    side: Literal[Side.OLD]
+    start: int
+    end: int
+    base_commit: str
+
+
+Anchor = Annotated[NewAnchor | OldAnchor, Field(discriminator="side")]
 
 
 class ExcerptLine(BaseModel):
@@ -190,12 +211,11 @@ def anchor_for(
     while the anchor's range covers only the lines on `side`, which the caller ensures `lines` includes.
     """
     numbers = [line.number for line in lines if line.side is side]
-    anchor = Anchor(
-        path=file.path,
-        side=side,
-        start=min(numbers),
-        end=max(numbers),
-        base_commit=base_commit if side is Side.OLD else None,
+    start, end = min(numbers), max(numbers)
+    anchor: Anchor = (
+        OldAnchor(path=file.path, side=Side.OLD, start=start, end=end, base_commit=base_commit)
+        if side is Side.OLD
+        else NewAnchor(path=file.path, side=Side.NEW, start=start, end=end, base_commit=None)
     )
     selected = set(lines)
     excerpt = tuple(ExcerptLine(kind=line.kind, text=line.text) for line in file.lines if line in selected)
@@ -213,7 +233,7 @@ def is_outdated(comment: Comment, diff: Diff) -> bool:
     its file left the diff, its old-side lines count in another base, or the text at its range differs.
     """
     anchor = comment.anchor
-    if anchor.side is Side.OLD and anchor.base_commit != diff.base.commit:
+    if isinstance(anchor, OldAnchor) and anchor.base_commit != diff.base.commit:
         return True
     file = next((file for file in diff.files if file.path == anchor.path), None)
     if file is None:

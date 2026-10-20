@@ -38,7 +38,8 @@ The benchmarks in `benchmarks/` sit outside the coverage gate, and reuse the tes
 Line and branch coverage of `src/assess_diff` and `tests` is held at 100% (`fail_under` in `pyproject.toml`),
 so new code comes with the tests that run it, UI code included (driven headless through counterweight's autopilot).
 Mutation testing aims for zero non-equivalent survivors;
-each equivalent survivor is recorded in `docs/mutation-testing.md` with why no test can catch it.
+each equivalent survivor is recorded in the `mutation-testing` project skill (`.claude/skills/mutation-testing/`)
+with why no test can catch it.
 
 ## Conventions
 

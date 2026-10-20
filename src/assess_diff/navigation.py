@@ -223,27 +223,27 @@ def moved(document: Document, cursor: Position, delta: int) -> Position:
     return document.positions[max(0, min(index, len(document.positions) - 1))]
 
 
-def next_of(document: Document, cursor: Position, direction: int, stops: tuple[int, ...]) -> Position:
+def next_of(document: Document, cursor: Position, stops: tuple[int, ...], *, forward: bool) -> Position:
     """
-    The first of `stops` (indexes of positions) after `cursor` in `direction` (`1` or `-1`), wrapping at the ends,
+    The first of `stops` (indexes of positions) after `cursor`, or before it when not `forward`, wrapping at the ends,
     or `cursor` itself when there are no stops.
     """
     if not stops:
         return cursor
     index = document.indexes[cursor]
-    ordered = stops if direction > 0 else tuple(reversed(stops))
-    following = next((stop for stop in ordered if (stop - index) * direction > 0), ordered[0])
+    ordered = stops if forward else tuple(reversed(stops))
+    following = next((stop for stop in ordered if (stop > index if forward else stop < index)), ordered[0])
     return document.positions[following]
 
 
-def next_stop(document: Document, cursor: Position, direction: int) -> Position:
+def next_stop(document: Document, cursor: Position, *, forward: bool) -> Position:
     """The next Tab stop: a hunk, a comment, or the summary."""
-    return next_of(document, cursor, direction, document.stops)
+    return next_of(document, cursor, document.stops, forward=forward)
 
 
-def next_comment(document: Document, cursor: Position, direction: int) -> Position:
+def next_comment(document: Document, cursor: Position, *, forward: bool) -> Position:
     """The next comment, skipping the hunks between."""
-    return next_of(document, cursor, direction, document.comment_stops)
+    return next_of(document, cursor, document.comment_stops, forward=forward)
 
 
 def extended(document: Document, cursor: RowAt, delta: int) -> RowAt:
