@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -324,7 +325,8 @@ async def test_compute_diff_carries_on_past_binary_and_deleted_files(scratch: Sc
     ]
 
 
-async def test_compute_diff_keeps_a_path_that_is_not_utf8(scratch: Scratch) -> None:
+@pytest.mark.skipif(sys.platform == "darwin", reason="APFS refuses a filename that isn't UTF-8")
+async def test_compute_diff_keeps_a_path_that_is_not_utf8(scratch: Scratch) -> None:  # pragma: darwin
     path = os.fsdecode(b"caf\xe9.txt")
     scratch.write(path, "before\n")
     scratch.commit()

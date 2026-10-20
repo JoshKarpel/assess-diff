@@ -164,8 +164,10 @@ def parse_review(content: bytes, migrations: Mapping[int, Migration] = MIGRATION
     document = json.loads(content)
     if not isinstance(document, dict):
         raise UnreadableReview("A review file holds a JSON object")
-    while (version := document.get("version")) != CURRENT_VERSION:
-        migrate = migrations.get(version) if isinstance(version, int) else None
+    # `type(...) is int` rather than `isinstance`, and checked even at the current version,
+    # since JSON's `true` and `1.0` compare equal to 1 (and `true` hashes as 1 in `migrations`), but no version wrote them.
+    while type(version := document.get("version")) is not int or version != CURRENT_VERSION:
+        migrate = migrations.get(version) if type(version) is int else None
         if migrate is None:
             raise UnreadableReview(
                 f"This review is version {version!r}, and this assess-diff reads up to version {CURRENT_VERSION}"

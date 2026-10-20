@@ -36,6 +36,7 @@ dev = [
     "types-pygments>=2.21.0.20260819",
     "check-jsonschema>=0.38.2",
     "zizmor>=1.30.1",
+    "coverage-conditional-plugin>=0.9.0",
 ]
 
 [project.scripts]
@@ -142,6 +143,11 @@ extend-immutable-calls = [
 [tool.coverage.run]
 branch = true
 source = ["src/assess_diff/", "tests/"]
+plugins = ["coverage_conditional_plugin"]
+
+[tool.coverage.coverage_conditional_plugin.rules]
+# `# pragma: darwin` excludes a line from coverage on macOS only, for code that can't run there.
+darwin = "sys_platform == 'darwin'"
 
 [tool.coverage.report]
 show_missing = true
