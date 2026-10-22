@@ -13,7 +13,7 @@ authors = [
 ]
 requires-python = ">=3.15"
 dependencies = [
-    "counterweight>=0.1.0",
+    "counterweight>=0.1.1",
     "pydantic>=2.11",
     "pygments>=2.17",
     "watchfiles>=1.0",
@@ -47,9 +47,6 @@ exclude-newer = "7 days"
 # counterweight and waxy (its layout engine, which counterweight tracks closely) are first-party,
 # so their releases are adopted without waiting out the cooldown.
 exclude-newer-package = { counterweight = false, waxy = false }
-
-[tool.uv.sources]
-counterweight = { git = "https://github.com/JoshKarpel/counterweight", branch = "main" }
 
 [tool.pytest.ini_options]
 addopts = ["--strict-markers", "-Werror", "--ignore-glob=mutants/*"]
