@@ -6,11 +6,10 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
-from counterweight.app import app
+from counterweight import app
 from counterweight.autopilot import WaitFor
 from counterweight.controls import Quit
 from counterweight.events import KeyPressed
-from counterweight.output import clipboard_instructions
 
 from assess_diff.diff import BaseMode
 from assess_diff.export import to_markdown
@@ -40,6 +39,7 @@ async def test_c_copies_the_review_as_markdown(scratch: Scratch, terminal: Termi
     open_review = OpenReview(ReviewStore(tmp_path / "reviews"), review, None, lambda: "new", lambda: CLOCK)
     open_review.update(lambda r: edit_summary(r, lambda _: "Copy me."))
     output = io.StringIO()
+    copies: list[str] = []
 
     await app(
         assess_app(
@@ -51,6 +51,7 @@ async def test_c_copies_the_review_as_markdown(scratch: Scratch, terminal: Termi
             None,
         ),
         output_stream=output,
+        clipboard_handler=copies.append,
         input_stream=terminal.stream,
         dimensions=(80, 20),
         autopilot=[
@@ -61,4 +62,4 @@ async def test_c_copies_the_review_as_markdown(scratch: Scratch, terminal: Termi
     )
 
     diff = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))
-    assert clipboard_instructions(to_markdown(open_review.review, diff)) in output.getvalue()
+    assert copies == [to_markdown(open_review.review, diff)]

@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from counterweight.controls import FocusOn
 from counterweight.elements import Chunk
 from counterweight.elements import Text
 from counterweight.events import KeyPressed
+from counterweight.events import MouseScrolledDown
+from counterweight.events import MouseScrolledLeft
+from counterweight.events import MouseScrolledRight
+from counterweight.events import MouseScrolledUp
 from counterweight.events import Receiver
 from counterweight.focus import FocusHandle
 from counterweight.focus import Subtree
+from counterweight.geometry import Position
 from counterweight.geometry import Rects
 from counterweight.geometry import Region
-from counterweight.hooks.impls import NodeKey
 from counterweight.keys import Key
 from counterweight.styles.utilities import col
 from counterweight.styles.utilities import margin_left
@@ -23,6 +29,8 @@ from assess_diff.diff import FileDiff
 from assess_diff.diff import FileStatus
 from assess_diff.diff import LineKind
 from assess_diff.navigation import FileLayout
+from assess_diff.preferences import PreferencesFile
+from assess_diff.storage import ReviewStore
 from assess_diff.ui.diff_view import COMMENT_STYLES
 from assess_diff.ui.diff_view import ROWS_PER_BLOCK
 from assess_diff.ui.diff_view import Actions
@@ -30,12 +38,18 @@ from assess_diff.ui.diff_view import Run
 from assess_diff.ui.diff_view import comment_title
 from assess_diff.ui.diff_view import editor
 from assess_diff.ui.diff_view import header_chunks
+from assess_diff.ui.diff_view import is_near
 from assess_diff.ui.diff_view import runs
 from assess_diff.ui.rows import Highlight
 from tests.builders import added
 from tests.builders import comment
 from tests.builders import context
 from tests.builders import removed
+from tests.conftest import Scratch
+from tests.harness import Harness
+from tests.harness import keys
+from tests.harness import showing
+from tests.harness import typed
 
 NONE, CURSOR, SELECTED = Highlight.NONE, Highlight.CURSOR, Highlight.SELECTED
 BLOCK = ROWS_PER_BLOCK
@@ -54,7 +68,7 @@ RECEIVER = Receiver(
     is_target=False,
     focus_handle=None,
     is_focused=False,
-    subtree=Subtree(key=NodeKey(3)),
+    subtree=Subtree(),
     scroll=None,
 )
 SLATE = text_color("slate", 400)
@@ -172,3 +186,128 @@ def test_header_names_the_file_any_rename_and_status_then_counts_its_lines(
         Chunk(content="  +3", style=text_color("green", 400)),
         Chunk(content=" -1", style=text_color("red", 400)),
     )
+
+
+WIDE = "value = compute(" + ", ".join(f"argument_{index}" for index in range(14)) + ")  # END"
+IN_THE_DIFF = Position(60, 10)
+
+
+@pytest.fixture
+def wide(scratch: Scratch, tmp_path: Path) -> Harness:
+    """`wide.py` with its short first line and its line wider than the screen both changed."""
+    scratch.write("wide.py", f"short = 1\n{WIDE.replace('value', 'old')}\n")
+    scratch.commit()
+    scratch.write("wide.py", f"short = 2\n{WIDE}\n")
+    return Harness(
+        scratch=scratch,
+        store=ReviewStore(tmp_path / "reviews"),
+        preferences=PreferencesFile(tmp_path / "preferences.json"),
+    )
+
+
+@pytest.mark.parametrize("key", [Key.Right, "l"])
+async def test_right_scrolls_the_code_sideways_and_keeps_the_line_numbers(wide: Harness, key: str) -> None:
+    await wide.run([*keys(key), wide.shot()])
+
+    assert "      2 + …ompute(argument_0" in wide.frames[0]
+
+
+@pytest.mark.parametrize("key", [Key.Left, "h"])
+async def test_left_scrolls_back(wide: Harness, key: str) -> None:
+    await wide.run([*keys("l", "l", key), wide.shot()])
+
+    assert "      2 + …ompute(argument_0" in wide.frames[0]
+
+
+async def test_zero_scrolls_back_to_the_start_of_the_lines(wide: Harness) -> None:
+    await wide.run([*keys("l", "l", "0"), wide.shot()])
+
+    assert "      2 + value = compute(" in wide.frames[0]
+
+
+async def test_scrolling_stops_where_the_widest_line_ends(wide: Harness) -> None:
+    await wide.run([*keys(*["l"] * 40), wide.shot(), *keys("h"), wide.shot()])
+
+    assert [any(line.rstrip().endswith("# END") for line in frame.splitlines()) for frame in wide.frames] == [
+        True,
+        False,
+    ], "the end of the widest line reaches the right edge, and one step back scrolls it out of view again"
+
+
+@pytest.mark.parametrize(
+    "event",
+    [MouseScrolledRight(absolute=IN_THE_DIFF), MouseScrolledDown(absolute=IN_THE_DIFF, is_shift_held=True)],
+    ids=["sideways", "shift"],
+)
+async def test_the_wheel_scrolls_right(wide: Harness, event: MouseScrolledRight | MouseScrolledDown) -> None:
+    await wide.run([event, wide.shot()])
+
+    assert "      2 + … = compute(" in wide.frames[0]
+
+
+@pytest.mark.parametrize(
+    "event",
+    [MouseScrolledLeft(absolute=IN_THE_DIFF), MouseScrolledUp(absolute=IN_THE_DIFF, is_shift_held=True)],
+    ids=["sideways", "shift"],
+)
+async def test_the_wheel_scrolls_left(wide: Harness, event: MouseScrolledLeft | MouseScrolledUp) -> None:
+    await wide.run([*keys("l"), event, wide.shot()])
+
+    assert "      2 + … = compute(" in wide.frames[0]
+
+
+async def test_the_wheel_without_shift_still_scrolls_down(wide: Harness) -> None:
+    await wide.run([MouseScrolledDown(absolute=IN_THE_DIFF), wide.shot()])
+
+    assert "      2 + value = compute(" in wide.frames[0]
+
+
+async def test_the_scroll_keys_type_into_a_comment(wide: Harness) -> None:
+    await wide.run([*keys(Key.Down, Key.Down, Key.Enter), *typed("hl0"), *keys(Key.Escape), wide.shot()])
+
+    assert [c.body for c in wide.review().comments] == ["hl0"]
+    assert "      2 + value = compute(" in wide.frames[0]
+
+
+VIEW = Region(left=0, top=10, right=80, bottom=30)
+
+
+@pytest.mark.parametrize(
+    ("extent", "expected"),
+    [
+        (Region(left=0, top=15, right=80, bottom=25), True),
+        (Region(left=0, top=0, right=80, bottom=100), True),
+        (Region(left=0, top=-9, right=80, bottom=-5), True),
+        (Region(left=0, top=45, right=80, bottom=60), True),
+        (Region(left=0, top=-30, right=80, bottom=-10), False),
+        (Region(left=0, top=50, right=80, bottom=70), False),
+    ],
+    ids=["inside", "around", "within-a-view-above", "within-a-view-below", "a-view-above", "a-view-below"],
+)
+def test_is_near_takes_in_a_views_height_either_side(extent: Region, expected: bool) -> None:
+    assert is_near(extent, VIEW) is expected
+
+
+@pytest.fixture
+def many(scratch: Scratch, tmp_path: Path) -> Harness:
+    """Six files, each 40 changed lines with a wide one at its end, so the last file is screens below the first."""
+    paths = [f"file_{index}.py" for index in range(6)]
+    for path in paths:
+        scratch.write(path, "".join(f"line_{n} = {n}\n" for n in range(40)))
+    scratch.commit()
+    for index, path in enumerate(paths):
+        scratch.write(
+            path,
+            "".join(f"line_{n} = {n + 1}\n" for n in range(39)) + f"{WIDE.replace('compute', f'compute_{index}')}\n",
+        )
+    return Harness(
+        scratch=scratch,
+        store=ReviewStore(tmp_path / "reviews"),
+        preferences=PreferencesFile(tmp_path / "preferences.json"),
+    )
+
+
+async def test_a_file_far_from_the_view_catches_up_with_the_scroll_once_it_comes_near(many: Harness) -> None:
+    await many.run([*keys("l", Key.End), showing("…ompute_5("), many.shot()])
+
+    assert "40 + …ompute_5(argument_0" in many.frames[0]

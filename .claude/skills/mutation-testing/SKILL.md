@@ -96,13 +96,6 @@ A survivor that matches no entry is a hole until shown otherwise.
   The next line sets `latest.current = actions` on every render, the first included,
   before anything reads the ref.
 
-### `ui/rows.py`
-
-- `row_chunks`: `None if left is None else syntax.get(left)` always takes `syntax.get(left)`,
-  and the same for `right`.
-  The syntax lines are a dict keyed by `Line`, so `get(None)` is `None`;
-  the conditional is there for mypy.
-
 ### `ui/syntax.py`
 
 - `highlighted`: `TAB_SIZE` dropped from the `highlight` call.

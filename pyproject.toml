@@ -13,7 +13,7 @@ authors = [
 ]
 requires-python = ">=3.15"
 dependencies = [
-    "counterweight",
+    "counterweight>=0.1.0",
     "pydantic>=2.11",
     "pygments>=2.17",
     "watchfiles>=1.0",
@@ -44,8 +44,9 @@ assess-diff = "assess_diff.cli:main"
 
 [tool.uv]
 exclude-newer = "7 days"
-# counterweight's layout engine, which counterweight tracks closely, so its main can need a release this new.
-exclude-newer-package = { waxy = false }
+# counterweight and waxy (its layout engine, which counterweight tracks closely) are first-party,
+# so their releases are adopted without waiting out the cooldown.
+exclude-newer-package = { counterweight = false, waxy = false }
 
 [tool.uv.sources]
 counterweight = { git = "https://github.com/JoshKarpel/counterweight", branch = "main" }

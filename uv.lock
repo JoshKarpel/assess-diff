@@ -7,6 +7,7 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
+counterweight = false
 waxy = false
 
 [[package]]
@@ -289,8 +290,8 @@ wheels = [
 
 [[package]]
 name = "counterweight"
-version = "0.1.0"
-source = { git = "https://github.com/JoshKarpel/counterweight?branch=main#32cced4dddb62622482a3d3670097052e4b8732e" }
+version = "0.1.1"
+source = { git = "https://github.com/JoshKarpel/counterweight?branch=main#58a4719bb8db5d3927d2d38493f69be14f0a8e66" }
 dependencies = [
     { name = "markdown-it-py" },
     { name = "mdit-py-plugins" },

@@ -37,7 +37,10 @@ The default branch is what `origin/HEAD` points at, or else a local `main` or `m
 A resumed review keeps the base it was last viewed against.
 
 Tab and Shift+Tab jump between hunks and comments, and `n` and `N` between comments alone.
-The file picker on the left (`f`) jumps to a file, and `/` there narrows it to the paths matching what you type.
+Left and Right (or `h` and `l`, a sideways swipe, or Shift and the wheel) scroll long lines sideways,
+keeping the line numbers in place, and `0` scrolls back to the start.
+The file picker on the left (`f`) jumps to a file, or to the summary from its entry at the top,
+and `/` there narrows it to the paths matching what you type.
 `s` switches between the unified and split views, and `t` picks a syntax theme, previewing each as you go.
 Both are kept as preferences, under `$XDG_CONFIG_HOME/assess-diff/`.
 

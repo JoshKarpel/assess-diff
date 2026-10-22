@@ -104,7 +104,7 @@ def harness(scratch: Scratch, tmp_path: Path) -> Harness:
 
 
 async def test_enter_on_a_directory_folds_it_and_unfolds_it(harness: Harness) -> None:
-    await harness.run([*keys("f", Key.Down), ENTER, harness.shot(), ENTER, harness.shot()])
+    await harness.run([*keys("f", Key.Down, Key.Down), ENTER, harness.shot(), ENTER, harness.shot()])
 
     assert [("▸ src/" in picker(frame), "views.py" in picker(frame)) for frame in harness.frames] == [
         (True, False),
@@ -113,13 +113,13 @@ async def test_enter_on_a_directory_folds_it_and_unfolds_it(harness: Harness) ->
 
 
 async def test_left_folds_a_directory_and_right_unfolds_it(harness: Harness) -> None:
-    await harness.run([*keys("f", Key.Down, Key.Left), harness.shot(), *keys(Key.Right), harness.shot()])
+    await harness.run([*keys("f", Key.Down, Key.Down, Key.Left), harness.shot(), *keys(Key.Right), harness.shot()])
 
     assert ["views.py" in picker(frame) for frame in harness.frames] == [False, True]
 
 
 async def test_enter_on_a_file_in_the_tree_comments_there(harness: Harness) -> None:
-    await harness.run([*keys("f", "j", "j", "j"), ENTER, *keys(Key.Down), ENTER, *typed("main"), ESCAPE])
+    await harness.run([*keys("f", "j", "j", "j", "j"), ENTER, *keys(Key.Down), ENTER, *typed("main"), ESCAPE])
 
     assert [(c.anchor.path, c.body) for c in harness.review().comments] == [("src/app/main.py", "main")]
 
@@ -162,3 +162,16 @@ async def test_down_and_up_move_through_the_filters_matches(harness: Harness) ->
     )
 
     assert [c.anchor.path for c in harness.review().comments] == ["src/app/views.py"]
+
+
+async def test_enter_on_the_summary_entry_jumps_to_the_summary(harness: Harness) -> None:
+    await harness.run([*keys(Key.Tab, "f"), ENTER, ENTER, *typed("from the picker"), ESCAPE])
+
+    assert harness.review().summary == "from the picker"
+    assert harness.review().comments == ()
+
+
+async def test_the_summary_entry_tops_the_picker(harness: Harness) -> None:
+    await harness.run([harness.shot()])
+
+    assert picker(harness.frames[0]).split()[:2] == ["≡", "Summary"]

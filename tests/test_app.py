@@ -429,14 +429,14 @@ async def test_theme_picker_says_when_nothing_matches(harness: Harness) -> None:
 
 
 async def test_file_picker_jumps_to_a_file(harness: Harness) -> None:
-    await harness.run([*keys("f", Key.Down, Key.Enter, Key.Down), ENTER, *typed("on notes"), ESCAPE])
+    await harness.run([*keys("f", Key.Down, Key.Down, Key.Enter, Key.Down), ENTER, *typed("on notes"), ESCAPE])
 
     (made,) = harness.review().comments
     assert (lines(made).path, lines(made).start) == ("notes.md", 1)
 
 
 async def test_file_picker_keys_stop_at_either_end(harness: Harness) -> None:
-    await harness.run([*keys("f", Key.Up, "j", "j", "k", "j", Key.Enter, Key.Down), ENTER, *typed("x"), ESCAPE])
+    await harness.run([*keys("f", Key.Up, "j", "j", "j", "k", "j", Key.Enter, Key.Down), ENTER, *typed("x"), ESCAPE])
 
     assert harness.review().comments[0].anchor.path == "notes.md"
 
@@ -683,7 +683,7 @@ async def test_q_quits(harness: Harness) -> None:
 async def test_a_binary_file_shows_its_placeholder(harness: Harness) -> None:
     harness.scratch.write("image.dat", b"\0\1\2")
 
-    await harness.run([*keys("f", Key.Down, Key.Enter), showing("Binary file"), harness.shot()])
+    await harness.run([*keys("f", Key.Down, Key.Down, Key.Enter), showing("Binary file"), harness.shot()])
 
     assert "Binary file" in harness.frames[0]
 
@@ -785,7 +785,7 @@ HANDLE = FocusHandle()
 
 def test_key_hints_list_the_diffs_keys() -> None:
     assert key_hints(INITIAL_SESSION, True) == (
-        "↑↓ move",
+        "↑↓←→ move",
         "⇧↑↓ select",
         "tab hunk/comment",
         "n/N comment",
@@ -875,7 +875,7 @@ async def test_shift_f_folds_the_files_away_and_back(harness: Harness) -> None:
 
 
 async def test_f_unfolds_the_files_to_choose_one(harness: Harness) -> None:
-    await harness.run([*keys("F", "f", Key.Down), ENTER, *keys(Key.Down), ENTER, *typed("on notes"), ESCAPE])
+    await harness.run([*keys("F", "f", Key.Down, Key.Down), ENTER, *keys(Key.Down), ENTER, *typed("on notes"), ESCAPE])
 
     (made,) = harness.review().comments
     assert (made.anchor.path, made.body) == ("notes.md", "on notes")
@@ -898,14 +898,31 @@ async def test_the_summary_dialog_opens_over_the_diff(harness: Harness) -> None:
     assert "esc done" not in harness.frames[1]
 
 
-async def test_the_files_picker_marks_the_file_the_cursor_is_in_on_the_header_background(harness: Harness) -> None:
-    await harness.run([TAB, harness.shot()])
+@pytest.mark.parametrize(("steps", "marked"), [((), "Summary"), ((TAB,), "app.py")], ids=["summary", "file"])
+async def test_the_files_picker_marks_where_the_cursor_is_on_the_header_background(
+    harness: Harness, steps: tuple[KeyPressed, ...], marked: str
+) -> None:
+    await harness.run([*steps, harness.shot()])
 
     slate = "48;2;15;23;42"
+    names = ("Summary", "app.py", "notes.md")
     picker_rows = {
         name: colored.split("│", 1)[0]
         for plain, colored in zip(harness.frames[0].splitlines(), harness.colored[0].splitlines(), strict=True)
-        for name in ("app.py", "notes.md")
+        for name in names
         if name in plain.split("│", 1)[0]
     }
-    assert {name: slate in row for name, row in picker_rows.items()} == {"app.py": True, "notes.md": False}
+    assert {name: slate in row for name, row in picker_rows.items()} == {name: name == marked for name in names}
+
+
+async def test_the_summary_title_is_on_its_boxs_border(harness: Harness) -> None:
+    await harness.run([harness.shot()])
+
+    assert "╭─ Review summary ─" in harness.frames[0]
+
+
+async def test_the_summary_dialog_title_is_on_its_border(harness: Harness) -> None:
+    await harness.run([*keys("r"), harness.shot()])
+
+    (dialog_top,) = [line for line in harness.frames[0].splitlines() if "Review summary" in line and "│" not in line]
+    assert "╭─ Review summary ─" in dialog_top

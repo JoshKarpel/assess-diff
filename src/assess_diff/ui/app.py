@@ -268,7 +268,7 @@ def key_hints(session: Session, are_keys_shown: bool) -> tuple[str, ...]:
     if not are_keys_shown:
         return ()
     return (
-        "↑↓ move",
+        "↑↓←→ move",
         "⇧↑↓ select",
         "tab hunk/comment",
         "n/N comment",
@@ -506,8 +506,8 @@ def assess_app(
             case _:
                 return None
 
-    def jump(path: str) -> InputResponse:
-        set_session(lambda s: replace(s, cursor=HeaderAt(path), selection=None))
+    def jump(target: HeaderAt | SummaryAt) -> InputResponse:
+        set_session(lambda s: replace(s, cursor=target, selection=None))
         return FocusOn(diff_focus), ScrollIntoView(cursor_element, block="start")
 
     def save_preferences(new: Preferences) -> None:
@@ -686,7 +686,6 @@ def assess_app(
             case _:
                 return None
 
-    current_path = getattr(cursor, "path", None)
     picker_files = () if diff is None else diff.files
     comment_counts = tuple(
         sum(comment.anchor.path == file.path for comment in review.comments) for file in picker_files
@@ -716,7 +715,7 @@ def assess_app(
                 style=row | fill(1),
                 children=(
                     *(
-                        (file_picker(picker_files, comment_counts, current_path, picker_focus, jump),)
+                        (file_picker(picker_files, comment_counts, cursor, picker_focus, jump),)
                         if are_files_shown
                         else ()
                     ),

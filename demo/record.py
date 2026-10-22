@@ -26,9 +26,10 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
-from counterweight.app import app
+from counterweight import app
 from counterweight.asciicast import Recording
 from counterweight.autopilot import AutopilotStep
+from counterweight.autopilot import paced
 from counterweight.autopilot import typed
 from counterweight.clock import FrozenClock
 from counterweight.controls import AdvanceClock
@@ -166,7 +167,7 @@ def press(*keys: str, beat: AdvanceClock = BEAT) -> list[AutopilotStep]:
 
 
 def write(text: str) -> list[AutopilotStep]:
-    return [*typed(text, pause=KEYSTROKE), BEAT]
+    return [*paced(typed(text), KEYSTROKE), BEAT]
 
 
 def hold(seconds: float) -> AdvanceClock:

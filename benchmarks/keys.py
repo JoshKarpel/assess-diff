@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import platform
 import statistics
@@ -20,10 +19,10 @@ import tempfile
 import time
 from dataclasses import dataclass
 from datetime import timedelta
-from importlib.metadata import distribution
 from itertools import pairwise
 from pathlib import Path
 
+from counterweight import __version__ as counterweight_version
 from counterweight.autopilot import AutopilotStep
 from counterweight.autopilot import WaitFor
 from counterweight.events import KeyPressed
@@ -40,6 +39,9 @@ FUNCTIONS_PER_FILE = 667
 
 CHANGED_EVERY = 50
 """Every this many functions one changes, so each file has a hunk about every 150 lines."""
+
+WIDE_TERMS = 80
+"""A changed function returns a sum of this many terms, a line 400 to 570 cells wide, so the diff scrolls sideways."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,25 +68,34 @@ WORKLOADS = (
     Workload("page-down", (), KeyPressed(key=Key.PageDown), 20),
     # Into the first hunk's new comment, where every key is an edit saved to disk.
     Workload("type", (KeyPressed(key=Key.Tab), KeyPressed(key=Key.Enter)), KeyPressed(key="x"), 40),
+    # Short of where the widest line's end reaches the right edge, so every press scrolls.
+    Workload("right", (), KeyPressed(key=Key.Right), 30),
 )
 
 
-def source(is_changed: bool) -> str:
-    return "".join(
-        f"def f{n}(x):\n    return x + {n * 2 if is_changed and n % CHANGED_EVERY == 0 else n}\n\n"
-        for n in range(FUNCTIONS_PER_FILE)
-    )
+def source(index: int, is_changed: bool) -> str:
+    """
+    The functions of file `index`, named for it, so no line is in two files:
+    rows alike across files would share the app's cached rows, as a real diff's files don't.
+    """
+
+    def returned(n: int) -> str:
+        if is_changed and n % CHANGED_EVERY == 0:
+            return " + ".join(str(n * 2 + term) for term in range(WIDE_TERMS))
+        return str(n)
+
+    return "".join(f"def file{index}_f{n}(x):\n    return x + {returned(n)}\n\n" for n in range(FUNCTIONS_PER_FILE))
 
 
 def build_repository(root: Path, size: Size) -> Scratch:
     """A repository of `size.files` files, committed, then changed in the working tree."""
     scratch = init_scratch(root)
     paths = [f"pkg/module_{index:02}.py" for index in range(size.files)]
-    for path in paths:
-        scratch.write(path, source(is_changed=False))
+    for index, path in enumerate(paths):
+        scratch.write(path, source(index, is_changed=False))
     scratch.commit()
-    for path in paths:
-        scratch.write(path, source(is_changed=True))
+    for index, path in enumerate(paths):
+        scratch.write(path, source(index, is_changed=True))
     return scratch
 
 
@@ -110,12 +121,6 @@ async def press_times(scratch: Scratch, workload: Workload) -> list[float]:
     return [after - before for before, after in pairwise(stamps)]
 
 
-def counterweight_commit() -> str:
-    """The commit counterweight was installed from, which says more than its version while it's a git dependency."""
-    installed = json.loads(distribution("counterweight").read_text("direct_url.json") or "{}")
-    return str(installed["vcs_info"]["commit_id"])[:12]
-
-
 def say(line: str) -> None:
     """Writes a line of the report as soon as it's known, since a full run takes minutes."""
     sys.stdout.write(f"{line}\n")
@@ -128,7 +133,7 @@ def milliseconds(seconds: float) -> str:
 
 async def run(only: str | None, repeat: int) -> None:
     say(
-        f"Python {platform.python_version()}, counterweight {counterweight_commit()}, "
+        f"Python {platform.python_version()}, counterweight {counterweight_version}, "
         f"{os.cpu_count()} CPUs, {repeat} runs of each\n"
     )
     say(f"{'workload':<20}{'presses':>8}{'median ms':>11}{'p90 ms':>9}{'max ms':>9}")

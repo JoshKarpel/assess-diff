@@ -4,8 +4,7 @@
 
 `assess-diff` is a terminal UI for reviewing a working tree's diff while an agent is still changing it,
 and handing the review back to the agent as Markdown.
-It's built on [counterweight](https://github.com/JoshKarpel/counterweight) (React-like TUI framework),
-which this project tracks at `main` through a uv git dependency.
+It's built on [counterweight](https://github.com/JoshKarpel/counterweight) (React-like TUI framework).
 `README.md` describes what it does for the person using it.
 
 When counterweight lacks something assess-diff needs, the fix belongs upstream in counterweight,

@@ -15,7 +15,7 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 
-from counterweight.app import app
+from counterweight import app
 from without_cli import PATH
 from without_cli import STR
 from without_cli import FromEnv

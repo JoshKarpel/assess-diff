@@ -20,9 +20,14 @@ from counterweight.events import InputHandler
 from counterweight.events import InputResponse
 from counterweight.events import KeyPressed
 from counterweight.events import MouseDown
+from counterweight.events import MouseScrolledDown
+from counterweight.events import MouseScrolledLeft
+from counterweight.events import MouseScrolledRight
+from counterweight.events import MouseScrolledUp
 from counterweight.events import Receiver
 from counterweight.focus import ElementHandle
 from counterweight.focus import FocusHandle
+from counterweight.geometry import Region
 from counterweight.handlers import first
 from counterweight.handlers import scroll_on_wheel
 from counterweight.hooks import use_focus
@@ -49,6 +54,8 @@ from assess_diff.ui.pills import ON_DIALOG
 from assess_diff.ui.pills import key_pills
 from assess_diff.ui.rows import Highlight
 from assess_diff.ui.rows import digits_for
+from assess_diff.ui.rows import measured_lines
+from assess_diff.ui.rows import overflow
 from assess_diff.ui.rows import row_chunks
 from assess_diff.ui.syntax import syntax_lines
 
@@ -65,6 +72,9 @@ class Run:
     stop: int
     highlight: Highlight
 
+
+SIDEWAYS_KEY_STEP = 8
+SIDEWAYS_WHEEL_STEP = 4
 
 ROWS_PER_BLOCK = 128
 """
@@ -266,16 +276,17 @@ def file_view(
     editing: tuple[int, FocusHandle] | None,
     theme: str,
     width: int,
+    offset: int,
     cursor_element: ElementHandle,
     actions: Actions,
 ) -> Div:
     """
-    One file: its header, its rows, and the comments after them.
+    One file: its header, its rows scrolled `offset` cells to the left, and the comments after them.
     `cursor` and `selected` are only given when they're in this file, so moving them elsewhere leaves it be.
     """
     file = layout.file
     path = file.path
-    syntax = use_memo(lambda: syntax_lines(file, theme), (file, theme))
+    texts = use_memo(lambda: measured_lines(file.lines, syntax_lines(file, theme)), (file, theme))
     digits = digits_for(file.lines)
     by_number = {comment.number: comment for comment in comments}
 
@@ -312,7 +323,7 @@ def file_view(
         for index in range(run.start, run.stop):
             if index > run.start:
                 lines.append(Chunk.newline())
-            lines.extend(row_chunks(layout.rows[index], syntax, digits, width, run.highlight))
+            lines.extend(row_chunks(layout.rows[index], texts, digits, width, offset, run.highlight))
         # Keyed by the row it starts at, so the node scroll anchoring holds still always starts at that row.
         # Unkeyed, the node at an index shows whichever run is there now: the cursor's run moving down a row
         # would read to anchoring as content moving, and scroll the view along with the cursor.
@@ -325,32 +336,96 @@ def file_view(
     return Div(style=col | margin_bottom(1), children=tuple(children))
 
 
+def is_near(extent: Region, view: Region) -> bool:
+    """Whether `extent` is in `view`, or within a view's height above or below it."""
+    return extent.bottom > view.top - view.height and extent.top < view.bottom + view.height
+
+
+@component
+def file_near_view(
+    layout: FileLayout,
+    comments: tuple[Comment, ...],
+    outdated: frozenset[int],
+    cursor: Position | None,
+    selected: tuple[int, int] | None,
+    editing: tuple[int, FocusHandle] | None,
+    theme: str,
+    width: int,
+    offset: int,
+    view: Region,
+    cursor_element: ElementHandle,
+    actions: Actions,
+) -> Div:
+    """
+    A file scrolled `offset` cells sideways while it's near the pane's `view`, as `is_near` says,
+    so a sideways press redraws only the files near what shows rather than every file in the diff.
+    Away from the view it keeps the offset it was last drawn at, and catches up in the render after
+    a scroll brings it near, which is why the margin is a whole view: a page's scroll lands within it.
+    """
+    # Its rects move with every vertical scroll, so this renders again each time,
+    # and `file_view` behind it only when the offset it's given changes.
+    rects = use_rects()
+    drawn = use_ref(offset)
+    if is_near(rects.margin, view):
+        drawn.current = offset
+    return Div(
+        style=col,
+        children=(
+            file_view(
+                layout,
+                comments,
+                outdated,
+                cursor,
+                selected,
+                editing,
+                theme,
+                width,
+                drawn.current,
+                cursor_element,
+                actions,
+            ),
+        ),
+    )
+
+
 @component
 def rows_run(lines: tuple[Chunk, ...], path: str, start: int, handle: ElementHandle | None, actions: Actions) -> Text:
     """A run of a file's rows starting at row `start`, drawn alike, with `handle` if it's the cursor's row."""
     return Text(content=lines, style=text_wrap_none, handle=handle, on_input=press_rows(path, start, actions))
 
 
-SUMMARY_TITLE = (Chunk(content="Review summary", style=text_bold | text_color("amber", 300)),)
+SUMMARY_TITLE = Text(
+    content=(Chunk(content=" Review summary ", style=text_bold | text_color("amber", 300)),),
+    style=position_absolute | inset_left(1) | inset_top(-1) | clip_to_border | text_wrap_none,
+)
 SUMMARY_STYLES = TextFieldStyles(box=pad_x(1), focused_box=default)
 # Docked at the bottom rather than centered, since moves center the cursor's line, which should stay in view.
 docked = position_absolute | inset_x(2) | inset_bottom(2) | fit_content_height | z(1)
 
 
 @component
-def summary_box(summary: str, is_cursor: bool, cursor_element: ElementHandle, actions: Actions) -> Text:
+def summary_box(summary: str, is_cursor: bool, cursor_element: ElementHandle, actions: Actions) -> Div:
     """The summary at the top of the scroll, to read; pressing it opens the summary dialog to write it."""
     body = summary or "(none yet: r to write one)"
-    return Text(
-        content=(*SUMMARY_TITLE, Chunk.newline(), Chunk(content=body, style=default if summary else text_dim)),
+    # The box's colors fill around the text, and the text paints its own cells.
+    background = padding_color("slate", 800) | content_color("slate", 800)
+    return Div(
         style=border
         | border_lightrounded
         | pad_x(1)
         | margin_bottom(1)
-        | text_wrap_stable
-        | (border_color("amber", 300) | text_bg("slate", 800) if is_cursor else border_color("slate", 600)),
+        | (border_color("amber", 300) | background if is_cursor else border_color("slate", 600)),
         handle=cursor_element if is_cursor else None,
         on_input=press(SummaryAt(), actions),
+        children=(
+            SUMMARY_TITLE,
+            Text(
+                content=body,
+                style=text_wrap_stable
+                | (default if summary else text_dim)
+                | (text_bg("slate", 800) if is_cursor else default),
+            ),
+        ),
     )
 
 
@@ -364,7 +439,7 @@ def summary_dialog(summary: str, handle: FocusHandle, actions: Actions) -> Div:
         style=docked | col | border | border_lightrounded | border_color("amber", 400) | text_bg("slate", 900),
         on_input=finish_on_escape(actions),
         children=(
-            Text(content=SUMMARY_TITLE, style=pad_x(1) | text_wrap_none),
+            SUMMARY_TITLE,
             text_area(
                 summary,
                 actions.edit_summary,
@@ -404,6 +479,37 @@ def diff_pane(
     rects = use_rects()
     width = rects.content.width
     pane = col | fill(1) | overflow_scroll | pad_x(1)
+    offset, set_offset = use_state(0)
+    limit = use_memo(
+        lambda: (
+            0
+            if document is None
+            else max(
+                (overflow(layout.rows, digits_for(layout.file.lines), width) for layout in document.files), default=0
+            )
+        ),
+        (document, width),
+    )
+    # Kept as it was scrolled, and only drawn within the limit, so a wider pane or a shorter diff shows less of
+    # the scroll than was asked for rather than forgetting it.
+    shown_offset = min(offset, limit)
+
+    def scroll_sideways(event: InputEvent, receiver: Receiver) -> InputResponse:
+        match event:
+            case KeyPressed(key=Key.Left | "h"):
+                by = -SIDEWAYS_KEY_STEP
+            case KeyPressed(key=Key.Right | "l"):
+                by = SIDEWAYS_KEY_STEP
+            case KeyPressed(key="0"):
+                by = -shown_offset
+            case MouseScrolledLeft() | MouseScrolledUp(is_shift_held=True):
+                by = -SIDEWAYS_WHEEL_STEP
+            case MouseScrolledRight() | MouseScrolledDown(is_shift_held=True):
+                by = SIDEWAYS_WHEEL_STEP
+            case _:
+                return None
+        set_offset(max(0, min(shown_offset + by, limit)))
+        return ()
 
     top = summary_box(summary, cursor == SummaryAt(), cursor_element, actions)
     if document is None:
@@ -430,7 +536,7 @@ def diff_pane(
     for layout in document.files:
         file_cursor, selected = in_file(layout.file.path)
         files.append(
-            file_view(
+            file_near_view(
                 layout,
                 tuple(by_path.get(layout.file.path, ())),
                 outdated,
@@ -439,6 +545,8 @@ def diff_pane(
                 comment_editing,
                 theme,
                 width,
+                shown_offset,
+                rects.padding,
                 cursor_element,
                 actions,
             ).with_key(layout.file.path)
@@ -464,6 +572,6 @@ def diff_pane(
 
     return Div(
         style=pane,
-        on_input=first(on_key, scroll_on_wheel()),
+        on_input=first(scroll_sideways, on_key, scroll_on_wheel()),
         children=(top, *files, *orphans),
     )

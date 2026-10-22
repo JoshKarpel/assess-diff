@@ -10,7 +10,7 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 
-from counterweight.app import app
+from counterweight import app
 from counterweight.autopilot import AutopilotStep
 from counterweight.autopilot import WaitFor
 from counterweight.controls import Quit
@@ -19,7 +19,7 @@ from counterweight.events import KeyPressed
 from counterweight.events import MouseDown
 from counterweight.events import MouseUp
 from counterweight.geometry import Position
-from counterweight.output import Frame
+from counterweight.paint import Frame
 
 from assess_diff.diff import BaseMode
 from assess_diff.diff import Diff

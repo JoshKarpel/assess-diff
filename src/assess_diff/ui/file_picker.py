@@ -1,5 +1,6 @@
 """
-The changed files on the left, as a tree of their directories, which jumps the diff to a file on Enter or a click.
+The changed files on the left, as a tree of their directories under an entry for the review summary,
+which jumps the diff to the summary or a file on Enter or a click.
 `/` narrows it to the files whose paths match what's typed, as a flat list.
 """
 
@@ -41,6 +42,9 @@ from counterweight.styles.utilities import *
 
 from assess_diff.diff import FileDiff
 from assess_diff.diff import FileStatus
+from assess_diff.navigation import HeaderAt
+from assess_diff.navigation import Position
+from assess_diff.navigation import SummaryAt
 from assess_diff.ui.theme_picker import Query
 from assess_diff.ui.theme_picker import matches
 
@@ -82,7 +86,19 @@ class FileRow:
     depth: int
 
 
+@dataclass(frozen=True, slots=True)
+class SummaryRow:
+    """The review summary's entry, above the tree, as the summary is above the files in the diff."""
+
+
 type TreeRow = DirectoryRow | FileRow
+type PickerRow = SummaryRow | TreeRow
+
+SUMMARY_ENTRY = (
+    # Never bold, even on the current row: terminal fonts draw a bold `≡` from another face, squashed.
+    Chunk(content="≡ ", style=text_color("amber", 300) | text_not_bold),
+    Chunk(content="Summary"),
+)
 
 
 def tree_rows(paths: Sequence[str], folded: frozenset[str]) -> tuple[TreeRow, ...]:
@@ -147,12 +163,13 @@ class Filtering:
 def file_picker(
     files: tuple[FileDiff, ...],
     comment_counts: tuple[int, ...],
-    current: str | None,
+    current: Position,
     handle: FocusHandle,
-    jump: Callable[[str], InputResponse],
+    jump: Callable[[HeaderAt | SummaryAt], InputResponse],
 ) -> Div:
     """
-    The changed files as a tree, each with its status and how many comments it has, as wide as the widest of them.
+    The changed files as a tree, each with its status and how many comments it has, as wide as the widest of them,
+    under the summary's entry. `current` is the diff's cursor, whose file or summary is marked.
     Enter or a press on a directory folds it or unfolds it, as Left and Right do.
     """
     focus = use_focus(handle=handle, in_focus_order=False)
@@ -162,17 +179,19 @@ def file_picker(
     not_filtering: Filtering | None = None
     filtering, set_filtering = use_state(not_filtering)
     paths = use_memo(lambda: tuple(file.path for file in files), (files,))
-    rows = use_memo(lambda: tree_rows(paths, folded), (paths, folded))
+    rows: tuple[PickerRow, ...] = use_memo(lambda: (SummaryRow(), *tree_rows(paths, folded)), (paths, folded))
     shown = min(highlighted, len(rows) - 1)
 
     def toggle(directory: DirectoryRow, is_folded: bool) -> None:
         set_folded(lambda f: f | {directory.path} if is_folded else f - {directory.path})
 
-    def press(index: int, row: TreeRow) -> InputResponse:
+    def press(index: int, row: PickerRow) -> InputResponse:
         set_highlighted(index)
         match row:
+            case SummaryRow():
+                return jump(SummaryAt())
             case FileRow(index=file):
-                return jump(files[file].path)
+                return jump(HeaderAt(files[file].path))
             case DirectoryRow():
                 toggle(row, not row.is_folded)
                 return FocusOn(handle)
@@ -181,7 +200,7 @@ def file_picker(
 
     def on_input(event: InputEvent, receiver: Receiver) -> InputResponse:
         # Only the tree's own keys: those the filter's field leaves alone bubble past it.
-        if not receiver.is_target or not rows:
+        if not receiver.is_target:
             return None
         row = rows[shown]
         in_view = ScrollIntoView(highlighted_entry, block="nearest")
@@ -207,18 +226,24 @@ def file_picker(
             case _:
                 return None
 
-    def entry(index: int, row: TreeRow) -> Text:
+    def entry(index: int, row: PickerRow) -> Text:
         match row:
+            case SummaryRow():
+                content: tuple[Chunk, ...] = SUMMARY_ENTRY
+                is_current = current == SummaryAt()
             case FileRow(index=file_index):
-                content = file_entry(files[file_index], row.label, comment_counts[file_index])
-                is_current = files[file_index].path == current
+                content = (
+                    Chunk(content=" " * row.depth),
+                    *file_entry(files[file_index], row.label, comment_counts[file_index]),
+                )
+                is_current = files[file_index].path == getattr(current, "path", None)
             case DirectoryRow():
-                content = directory_entry(row)
+                content = (Chunk(content=" " * row.depth), *directory_entry(row))
                 is_current = False
             case _ as unreachable:
                 assert_never(unreachable)
         return Text(
-            content=(Chunk(content=" " * row.depth), *content),
+            content=content,
             style=text_wrap_none
             | pad_x(1)
             # The current file on the header's and footer's background, under the highlight, which wins on its row.
@@ -254,8 +279,10 @@ def file_picker(
                 else Div(
                     style=col | fill(1) | overflow_y_scroll,
                     on_input=scroll_on_wheel(),
-                    children=tuple(entry(index, row) for index, row in enumerate(rows))
-                    or (Text(content="No changes", style=pad_x(1) | text_color("slate", 500)),),
+                    children=(
+                        *(entry(index, row) for index, row in enumerate(rows)),
+                        *(() if files else (Text(content="No changes", style=pad_x(1) | text_color("slate", 500)),)),
+                    ),
                 )
             ),
         ),
@@ -271,7 +298,7 @@ def filter_list(
     set_query: Callable[[Callable[[Query], Query]], None],
     dismiss: Callable[[], None],
     back: Callable[[], InputResponse],
-    jump: Callable[[str], InputResponse],
+    jump: Callable[[HeaderAt | SummaryAt], InputResponse],
 ) -> Div:
     """
     The files whose paths hold what's typed, matched as the theme picker matches themes:
@@ -303,7 +330,7 @@ def filter_list(
             case KeyPressed(key=Key.Up) if shown:
                 set_query(lambda q: replace(q, highlighted=(q.highlighted - 1) % len(shown)))
             case KeyPressed(key=Key.Enter) if shown:
-                return jump(shown[query.highlighted])
+                return jump(HeaderAt(shown[query.highlighted]))
             case KeyPressed(key=Key.Escape):
                 dismiss()
                 return back()
@@ -338,7 +365,7 @@ def filter_list(
                         | pad_x(1)
                         | (text_bg("indigo", 800) if index == query.highlighted else default),
                         handle=highlighted_match if index == query.highlighted else None,
-                        on_input=on_click(partial(jump, path)),
+                        on_input=on_click(partial(jump, HeaderAt(path))),
                     )
                     for index, path in enumerate(shown)
                 )
