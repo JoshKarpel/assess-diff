@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import os
 import pty
 import resource
@@ -23,6 +24,13 @@ def pytest_configure(config: pytest.Config) -> None:
         pages = int(Path("/proc/self/statm").read_text().split()[0])
         _, hard = resource.getrlimit(resource.RLIMIT_AS)
         resource.setrlimit(resource.RLIMIT_AS, (pages * resource.getpagesize() + (1 << 30), hard))
+
+
+@pytest.fixture(autouse=True)
+def unfrozen_heap() -> Iterator[None]:
+    """Hands the objects the app froze back to the garbage collector, so no test runs on a heap another froze."""
+    yield
+    gc.unfreeze()
 
 
 @pytest.fixture(autouse=True)

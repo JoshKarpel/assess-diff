@@ -143,7 +143,9 @@ def file_entry(file: FileDiff, label: str, comments: int) -> tuple[Chunk, ...]:
         Chunk(content=f"{STATUS_LETTERS[file.status]} ", style=STATUS_COLORS[file.status]),
         Chunk(content=label),
         # A dot in the comments' amber, rather than `#`, which names a single comment by its number.
-        *((Chunk(content=f" ●{comments}", style=text_color("amber", 400)),) if comments else ()),
+        # A file without comments keeps the room a count of up to nine takes: the picker is as wide as its widest entry,
+        # and a file's first comment widening it would narrow the diff, which draws every row of every file again.
+        Chunk(content=f" ●{comments}", style=text_color("amber", 400)) if comments else Chunk(content="   "),
     )
 
 

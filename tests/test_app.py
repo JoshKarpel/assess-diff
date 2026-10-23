@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -107,6 +108,12 @@ async def test_a_diff_computed_already_is_drawn_in_the_first_frame(harness: Harn
 
     assert "return 6" in harness.frames[0]
     assert "reading the diff" not in harness.frames[0]
+
+
+async def test_the_drawn_diff_is_frozen_out_of_the_garbage_collectors_passes(harness: Harness) -> None:
+    await harness.run([harness.shot()])
+
+    assert gc.get_freeze_count() > 0
 
 
 async def test_tab_reaches_the_first_hunk_and_enter_comments_on_it(harness: Harness) -> None:
@@ -965,6 +972,14 @@ async def test_the_files_picker_marks_where_the_cursor_is_on_the_header_backgrou
         if name in plain.split("│", 1)[0]
     }
     assert {name: slate in row for name, row in picker_rows.items()} == {name: name == marked for name in names}
+
+
+async def test_a_files_first_comment_leaves_the_diff_as_wide_as_it_was(harness: Harness) -> None:
+    await harness.run([harness.shot(), TAB, ENTER, *typed("x"), ESCAPE, harness.shot()])
+
+    before, after = (where(frame, "│").x for frame in harness.frames)
+    assert "app.py ●1" in harness.frames[1]
+    assert after == before, "the picker's border, the diff's left edge, stays put"
 
 
 async def test_the_summary_title_is_on_its_boxs_border(harness: Harness) -> None:

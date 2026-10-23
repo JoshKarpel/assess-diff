@@ -56,7 +56,7 @@ def test_marked_is_the_entry_of_the_summary_or_the_file_the_cursor_is_in(
 
 
 def test_file_entry_shows_the_status_and_the_name() -> None:
-    assert file_entry(CHANGED, "b.py", 0) == (STATUS, Chunk(content="b.py"))
+    assert file_entry(CHANGED, "b.py", 0) == (STATUS, Chunk(content="b.py"), Chunk(content="   "))
 
 
 def test_file_entry_shows_how_many_comments_a_file_has() -> None:

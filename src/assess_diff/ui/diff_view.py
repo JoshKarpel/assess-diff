@@ -7,6 +7,7 @@ which keeps the element count near the number of hunks and comments, since whole
 
 from __future__ import annotations
 
+import gc
 from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import pairwise
@@ -31,6 +32,7 @@ from counterweight.focus import FocusHandle
 from counterweight.geometry import Region
 from counterweight.handlers import first
 from counterweight.handlers import scroll_on_wheel
+from counterweight.hooks import use_effect
 from counterweight.hooks import use_focus
 from counterweight.hooks import use_memo
 from counterweight.hooks import use_rects
@@ -285,7 +287,8 @@ def file_view(
 ) -> Div:
     """
     One file: its header, its rows scrolled `offset` cells to the left, and the comments after them.
-    `cursor` and `selected` are only given when they're in this file, so moving them elsewhere leaves it be.
+    `cursor`, `selected` and `editing` are only given when they're in this file,
+    so moving them, or opening or closing an editor, elsewhere leaves it be.
     """
     file = layout.file
     path = file.path
@@ -476,6 +479,19 @@ def summary_dialog(summary: str, handle: FocusHandle, actions: Actions) -> Div:
     )
 
 
+async def freeze_drawn_heap() -> None:
+    """
+    Exempts everything alive from the cyclic garbage collector's passes, run each time the rows are drawn anew:
+    for a new diff, at a new width, or in the other view.
+    A drawn diff is a heap of a million or so small objects, every line's measured, colored text,
+    which reference counting frees and no cycle holds, so a full collection walks all of it to find nothing,
+    taking a fifth of a second on a large diff in the middle of whatever key set it off.
+    Collecting first frees any cycle that's already garbage, which freezing would otherwise keep for good.
+    """
+    gc.collect()
+    gc.freeze()
+
+
 def sideways(event: InputEvent, limit: int) -> Callable[[int], int] | None:
     """
     How `event` moves the sideways scroll, kept within `0` to `limit`, or `None` for an event that doesn't.
@@ -527,6 +543,7 @@ def diff_pane(
     # On the diff alone, so moving a comment, switching view or resizing the pane measures nothing again.
     extents = use_memo(lambda: () if diff is None else tuple(Extent.of(file.lines) for file in diff.files), (diff,))
     is_split = document is not None and document.mode is ViewMode.SPLIT
+    use_effect(freeze_drawn_heap, deps=(diff, width, is_split))
     limit = max((overflow(extent, is_split, width) for extent in extents), default=0)
     # Kept as it was scrolled, and only drawn within the limit, so a wider pane or a shorter diff shows less of
     # the scroll than was asked for rather than forgetting it.
@@ -559,6 +576,11 @@ def diff_pane(
             case _:
                 return None, None
 
+    def editing_in(path: str) -> tuple[int, FocusHandle] | None:
+        if comment_editing is None or not any(c.number == comment_editing[0] for c in by_path.get(path, ())):
+            return None
+        return comment_editing
+
     near = near_cursor(document, cursor, 2 * rects.padding.height)
     files = []
     for layout in document.files:
@@ -570,7 +592,7 @@ def diff_pane(
                 outdated,
                 file_cursor,
                 selected,
-                comment_editing,
+                editing_in(layout.file.path),
                 theme,
                 width,
                 shown_offset,
