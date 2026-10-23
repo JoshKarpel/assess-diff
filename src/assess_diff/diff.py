@@ -188,7 +188,19 @@ def parse_diff(text: str) -> tuple[FileChange, ...]:
     `diff --git` line (see `header_path`), which, unlike the `---`/`+++` headers, a binary file and a pure mode
     change have too.
     """
-    return tuple(parse_file(block) for block in file_blocks(text.splitlines()))
+    return tuple(parse_file(block) for block in file_blocks(git_lines(text)))
+
+
+def git_lines(text: str) -> list[str]:
+    """
+    `text` split into lines as git splits them, on line feeds alone, with no empty line after a final one.
+    Not `str.splitlines`, which also splits on carriage returns, form feeds and Unicode line separators,
+    so a diff's lines would disagree with the working tree's they're laid on.
+    """
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 def file_blocks(lines: list[str]) -> Iterator[list[str]]:

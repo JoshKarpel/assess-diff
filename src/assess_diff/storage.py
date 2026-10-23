@@ -39,17 +39,39 @@ def reviews_directory(data_home: Path | None) -> Path:
     return (data_home or Path.home() / ".local" / "share") / "assess-diff" / "reviews"
 
 
+@dataclass(frozen=True, slots=True)
+class Unreadable:
+    """A file in the store that can't be read as a review, and why: malformed, or written by a newer assess-diff."""
+
+    path: Path
+    reason: str
+
+    @property
+    def message(self) -> str:
+        """What to tell the reader, naming the file, so it can be fixed or moved aside."""
+        return f"Can't read the review in {self.path}: {self.reason}"
+
+
+def read_review(path: Path, content: bytes) -> Review | Unreadable:
+    """The review in `content`, read from the file at `path`, or why it can't be read as one."""
+    try:
+        return parse_review(content)
+    except (UnreadableReview, ValueError) as error:
+        return Unreadable(path=path, reason=str(error))
+
+
 def parsed(path: Path, content: bytes) -> Review:
     """
     The review in `content`, read from the file at `path`.
 
     Raises:
-        UnreadableReview: If it can't be read as a review, naming the file, so it can be fixed or moved aside.
+        UnreadableReview: If it can't be read as a review, with the `Unreadable.message` naming the file.
     """
-    try:
-        return parse_review(content)
-    except (UnreadableReview, ValueError) as error:
-        raise UnreadableReview(f"Can't read the review in {path}: {error}") from error
+    match read_review(path, content):
+        case Unreadable() as unreadable:
+            raise UnreadableReview(unreadable.message)
+        case review:
+            return review
 
 
 def digest(content: bytes) -> str:
@@ -69,20 +91,42 @@ class Stored:
 
 
 @dataclass(frozen=True, slots=True)
+class Listing:
+    """
+    The reviews in a store, most recently updated first, and the files in it that can't be read as reviews,
+    which are listed beside them rather than failing the listing, so one bad file never hides the rest.
+    """
+
+    reviews: tuple[Review, ...]
+    unreadable: tuple[Unreadable, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewStore:
     directory: Path
 
     def path(self, review_id: str) -> Path:
         return self.directory / f"{review_id}.json"
 
-    def reviews(self) -> tuple[Review, ...]:
-        """Every review, most recently updated first."""
-        reviews = (parsed(path, path.read_bytes()) for path in self.directory.glob("*.json"))
-        return tuple(sorted(reviews, key=lambda review: review.updated, reverse=True))
+    def listed(self) -> Listing:
+        """Every file in the store, read as a review where it can be."""
+        reviews: list[Review] = []
+        unreadable: list[Unreadable] = []
+        for path in sorted(self.directory.glob("*.json")):
+            match read_review(path, path.read_bytes()):
+                case Unreadable() as file:
+                    unreadable.append(file)
+                case review:
+                    reviews.append(review)
+        return Listing(
+            reviews=tuple(sorted(reviews, key=lambda review: review.updated, reverse=True)),
+            unreadable=tuple(unreadable),
+        )
 
-    def find(self, prefix: str) -> Stored:
+    def matching(self, prefix: str) -> str:
         """
-        The review whose id starts with `prefix`, as git takes an abbreviated commit.
+        The id of the review whose id starts with `prefix`, as git takes an abbreviated commit,
+        found by its file's name alone, so even a file that can't be read can be named.
 
         Raises:
             NoSuchReview: If no review's id starts with `prefix`, or more than one does.
@@ -91,7 +135,17 @@ class ReviewStore:
         if len(matches) != 1:
             found = "No review" if not matches else f"{len(matches)} reviews"
             raise NoSuchReview(f"{found} with an id starting with {prefix!r}")
-        return self.load(matches[0].stem)
+        return matches[0].stem
+
+    def find(self, prefix: str) -> Stored:
+        """
+        The review whose id starts with `prefix`, as `matching` finds it.
+
+        Raises:
+            NoSuchReview: If no review's id starts with `prefix`, or more than one does.
+            UnreadableReview: If its file can't be read as a review.
+        """
+        return self.load(self.matching(prefix))
 
     def load(self, review_id: str) -> Stored:
         path = self.path(review_id)

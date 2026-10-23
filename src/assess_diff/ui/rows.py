@@ -11,12 +11,10 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from bisect import bisect_right
-from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
 from itertools import accumulate
-from itertools import chain
 from itertools import groupby
 from operator import itemgetter
 from typing import assert_never
@@ -119,7 +117,8 @@ def scrolled(chunks: tuple[Chunk, ...], offset: int, style: Style) -> tuple[Chun
     # The `…` takes the cell at `offset`, so text shows from the cell after it.
     # Cell starts only grow, so the cells starting there or later are a suffix.
     first = bisect_left(starts, offset + 1, hi=len(cells))
-    gap = starts[first] - (offset + 1) if first < len(cells) else 0
+    # Negative, and so no spaces, when every cell is scrolled out of view.
+    gap = starts[first] - (offset + 1)
     return (Chunk(content="…" + " " * gap, style=style), *joined(cells[first:]))
 
 
@@ -288,27 +287,41 @@ def row_chunks(
             assert_never(unreachable)
 
 
-def overflow(rows: tuple[Line | SplitRow, ...], digits: int, width: int) -> int:
+@dataclass(frozen=True, slots=True)
+class Extent:
     """
-    How far the text of the widest of a file's `rows`, drawn `width` cells wide, runs past what shows of it:
+    What a file's rows need whatever the pane's width: its gutter's digits, and the width of its widest text
+    on each side of the split view, the base's (context and removed lines) and the working tree's (context and added).
+    Measuring takes every line's graphemes, so it's done once for each diff, and `overflow` only does arithmetic on it.
+    """
+
+    digits: int
+    old: int
+    new: int
+
+    @classmethod
+    def of(cls, lines: tuple[Line, ...]) -> Extent:
+        widths = [(line.kind, cell_width(displayed(line.text))) for line in lines]
+        return cls(
+            digits=digits_for(lines),
+            old=max((width for kind, width in widths if kind is not LineKind.ADDED), default=0),
+            new=max((width for kind, width in widths if kind is not LineKind.REMOVED), default=0),
+        )
+
+
+def overflow(extent: Extent, is_split: bool, width: int) -> int:
+    """
+    How far the widest text of a file with `extent`, drawn `width` cells wide, runs past what shows of it:
     the furthest the file scrolls left, which brings that text's end to the right edge.
     """
-    unified = unified_room(digits, width)
+    if not is_split:
+        return max(0, max(extent.old, extent.new) - unified_room(extent.digits, width))
     left_width, right_width = split_widths(width)
-    rooms = (half_room(digits, left_width), half_room(digits, right_width))
-
-    def past(row: Line | SplitRow) -> Iterator[int]:
-        match row:
-            case Line():
-                yield cell_width(displayed(row.text)) - unified
-            case SplitRow():
-                for line, room in zip((row.left, row.right), rooms, strict=True):
-                    if line is not None:
-                        yield cell_width(displayed(line.text)) - room
-            case _ as unreachable:
-                assert_never(unreachable)
-
-    return max(chain((0,), (distance for row in rows for distance in past(row))))
+    return max(
+        0,
+        extent.old - half_room(extent.digits, left_width),
+        extent.new - half_room(extent.digits, right_width),
+    )
 
 
 def digits_for(lines: tuple[Line, ...]) -> int:

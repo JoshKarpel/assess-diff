@@ -16,7 +16,9 @@ from assess_diff.diff import LineKind
 from assess_diff.preferences import PreferencesFile
 from assess_diff.review import Review
 from assess_diff.storage import ReviewStore
+from assess_diff.storage import Unreadable
 from assess_diff.ui.review_manager import entry_chunks
+from assess_diff.ui.review_manager import unreadable_chunks
 from tests.builders import comment
 from tests.builders import review
 from tests.conftest import Scratch
@@ -66,7 +68,11 @@ def dialog(frame: str) -> list[str]:
     """The dialog's entries, from the line after its title to the line before its key hints."""
     lines = frame.splitlines()
     first = next(index for index, line in enumerate(lines) if "│ Reviews" in line) + 1
-    last = next(index for index, line in enumerate(lines) if "esc close   ●" in line or "press d again" in line)
+    last = next(
+        index
+        for index, line in enumerate(lines)
+        if "esc close   ●" in line or "press d again" in line or "Can't read" in line
+    )
     return [line.strip(" │") for line in lines[first:last]]
 
 
@@ -91,6 +97,49 @@ def test_entry_marks_the_review_then_names_it_then_its_branch_comments_and_updat
     )
 
 
+def test_unreadable_chunks_name_the_file_and_the_first_line_of_why() -> None:
+    file = Unreadable(Path("/data/reviews/0199-x.json"), "2 validation errors for Review\nname\n  Field required")
+
+    assert unreadable_chunks(file) == (
+        Chunk(content="! ", style=text_color("red", 400)),
+        Chunk(content="0199-x.json"),
+        Chunk(content="  2 validation errors for Review", style=text_dim),
+    )
+
+
+def garble(harness: Harness, name: str) -> None:
+    harness.store.directory.mkdir(parents=True, exist_ok=True)
+    (harness.store.directory / name).write_text("not json")
+
+
+async def test_o_lists_the_files_that_cant_be_read_under_the_reviews(harness: Harness) -> None:
+    seed(harness, REVIEW_ID, "the open one", minutes=5)
+    garble(harness, "garbled.json")
+    (harness.store.directory / "longer-than-the-dialog.json").write_text('{"version": 99}')
+
+    await harness.run([*keys("o"), showing("Reviews"), harness.shot()])
+
+    lines = harness.frames[0].splitlines()
+    heading = next(index for index, line in enumerate(lines) if "│ Can't read" in line)
+    assert dialog(harness.frames[0]) == [
+        "+ New review",
+        "● the open one  main  0 comments  updated 2026-06-01 12:05",
+        "",
+    ]
+    assert lines[heading + 1].strip(" │") == "! garbled.json  Expecting value: line 1 column 1 (char 0)"
+    assert lines[heading + 2].rstrip().endswith("this assess-diff reads … │")
+
+
+async def test_reviews_are_managed_beside_a_file_that_cant_be_read(harness: Harness) -> None:
+    seed(harness, REVIEW_ID, "the open one", minutes=5)
+    seed(harness, "other", "doomed", minutes=9)
+    garble(harness, "garbled.json")
+
+    await harness.run([*keys("o", "j", "j", "e"), *typed("!"), ENTER, *keys("k", "d", "d"), ESCAPE])
+
+    assert (harness.review().name, harness.store.path("other").exists()) == ("the open one!", False)
+
+
 async def test_o_lists_new_review_then_this_projects_reviews_most_recent_first(harness: Harness) -> None:
     seed(harness, REVIEW_ID, "the open one", minutes=5)
     seed(harness, "other", "another one", minutes=9, body="hi")
@@ -102,6 +151,15 @@ async def test_o_lists_new_review_then_this_projects_reviews_most_recent_first(h
         "another one  main  1 comment  updated 2026-06-01 12:09",
         "● the open one  main  0 comments  updated 2026-06-01 12:05",
     ]
+
+
+async def test_a_name_too_long_for_the_dialog_is_cut_short_inside_it(harness: Harness) -> None:
+    seed(harness, REVIEW_ID, "x" * 120, minutes=5)
+
+    await harness.run([*keys("o"), showing("Reviews"), harness.shot()])
+
+    (entry,) = (line for line in harness.frames[0].splitlines() if "● xxx" in line)
+    assert entry.rstrip().endswith("x… │")
 
 
 async def test_reviews_from_another_worktree_are_marked(harness: Harness, tmp_path: Path) -> None:

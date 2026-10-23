@@ -18,6 +18,7 @@ from assess_diff.diff import FileDiff
 from assess_diff.diff import FileStatus
 from assess_diff.diff import added_file
 from assess_diff.diff import file_diff
+from assess_diff.diff import git_lines
 from assess_diff.diff import parse_diff
 from assess_diff.diff import placeholder_file
 from assess_diff.diff import untracked_placeholder
@@ -243,7 +244,4 @@ def read_lines(path: Path) -> tuple[str, ...] | str:
         text = content.decode()
     except UnicodeDecodeError:
         return "Binary file"
-    lines = text.split("\n")
-    if lines[-1] == "":
-        lines.pop()
-    return tuple(lines)
+    return tuple(git_lines(text))

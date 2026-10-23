@@ -12,11 +12,13 @@ import pytest
 from assess_diff.review import Review
 from assess_diff.review import UnreadableReview
 from assess_diff.review import edit_summary
+from assess_diff.storage import Listing
 from assess_diff.storage import NoSuchReview
 from assess_diff.storage import OpenReview
 from assess_diff.storage import ReviewChanged
 from assess_diff.storage import ReviewStore
 from assess_diff.storage import Stored
+from assess_diff.storage import Unreadable
 from assess_diff.storage import digest
 from assess_diff.storage import for_project
 from assess_diff.storage import reviews_directory
@@ -95,7 +97,7 @@ def test_save_waits_for_the_lock_and_then_sees_what_was_written_under_it(store: 
 def test_reviews_leaves_out_the_lock_file(store: ReviewStore) -> None:
     store.save(review(), None)
 
-    assert [r.id for r in store.reviews()] == [review().id]
+    assert [r.id for r in store.listed().reviews] == [review().id]
 
 
 def test_save_over_a_file_changed_by_another_process_refuses(store: ReviewStore) -> None:
@@ -117,11 +119,11 @@ def test_reviews_lists_the_most_recently_updated_first(store: ReviewStore) -> No
     for review_id, minutes in (("older", 1), ("newest", 3), ("middle", 2)):
         store.save(named(review_id, STARTED + timedelta(minutes=minutes)), None)
 
-    assert [r.id for r in store.reviews()] == ["newest", "middle", "older"]
+    assert [r.id for r in store.listed().reviews] == ["newest", "middle", "older"]
 
 
-def test_reviews_of_a_store_never_written_is_none(store: ReviewStore) -> None:
-    assert store.reviews() == ()
+def test_listing_a_store_never_written_finds_nothing(store: ReviewStore) -> None:
+    assert store.listed() == Listing(reviews=(), unreadable=())
 
 
 def test_find_takes_any_unambiguous_prefix(store: ReviewStore) -> None:
@@ -148,7 +150,7 @@ def test_delete_removes_the_file(store: ReviewStore) -> None:
 
     store.delete("doomed")
 
-    assert store.reviews() == ()
+    assert store.listed().reviews == ()
 
 
 def test_for_project_puts_this_worktree_first_and_leaves_other_projects_out() -> None:
@@ -210,6 +212,35 @@ def test_update_over_another_process_saves_as_a_new_review(store: ReviewStore) -
         "mine, later",
     )
     assert open_review.review.id == "forked-id"
+
+
+def test_listed_puts_files_that_cant_be_read_beside_the_reviews(store: ReviewStore) -> None:
+    store.save(named("fine"), None)
+    (store.directory / "garbled.json").write_text("not json")
+    (store.directory / "future.json").write_text('{"version": 99}')
+
+    listing = store.listed()
+
+    assert [r.id for r in listing.reviews] == ["fine"]
+    assert listing.unreadable == (
+        Unreadable(
+            store.directory / "future.json", "This review is version 99, and this assess-diff reads up to version 1"
+        ),
+        Unreadable(store.directory / "garbled.json", "Expecting value: line 1 column 1 (char 0)"),
+    )
+
+
+def test_unreadable_message_names_the_file_then_says_why() -> None:
+    assert (
+        Unreadable(Path("/data/x.json"), "it's broken").message == "Can't read the review in /data/x.json: it's broken"
+    )
+
+
+def test_matching_names_a_review_whose_file_cant_be_read(store: ReviewStore) -> None:
+    store.directory.mkdir(parents=True)
+    (store.directory / "0199eeee-garbled.json").write_text("not json")
+
+    assert store.matching("0199ee") == "0199eeee-garbled"
 
 
 def test_an_unreadable_review_names_its_file(store: ReviewStore) -> None:

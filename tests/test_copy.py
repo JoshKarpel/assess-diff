@@ -49,6 +49,7 @@ async def test_c_copies_the_review_as_markdown(scratch: Scratch, terminal: Termi
             PreferencesFile(tmp_path / "preferences.json"),
             Preferences.defaults(),
             None,
+            (),
         ),
         output_stream=output,
         clipboard_handler=copies.append,

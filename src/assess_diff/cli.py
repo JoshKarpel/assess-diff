@@ -42,10 +42,12 @@ from assess_diff.preferences import PreferencesFile
 from assess_diff.preferences import preferences_path
 from assess_diff.review import Review
 from assess_diff.review import UnreadableReview
+from assess_diff.storage import Listing
 from assess_diff.storage import NoSuchReview
 from assess_diff.storage import OpenReview
 from assess_diff.storage import ReviewStore
 from assess_diff.storage import Stored
+from assess_diff.storage import Unreadable
 from assess_diff.storage import for_project
 from assess_diff.storage import reviews_directory
 from assess_diff.ui.app import assess_app
@@ -92,17 +94,22 @@ async def target_branch(repository: Repository, base: str | None) -> str | None:
         return None
 
 
-def latest(store: ReviewStore, repository: Repository) -> Stored | None:
-    """The current worktree's most recently updated review, if it has one."""
-    found = next(
+def latest(reviews: tuple[Review, ...], repository: Repository) -> Review | None:
+    """The current worktree's most recently updated of `reviews`, which are most recently updated first."""
+    return next(
         (
             review
-            for review in store.reviews()
+            for review in reviews
             if review.project == repository.common_dir and review.worktree == repository.worktree
         ),
         None,
     )
-    return None if found is None else store.load(found.id)
+
+
+def report_unreadable(streams: Streams, unreadable: tuple[Unreadable, ...]) -> None:
+    """Say which files in the store can't be read, on standard error, so a command's output is only its own."""
+    for file in unreadable:
+        streams.stderr.write(f"assess-diff: {file.message}\n")
 
 
 async def current_diff(repository: Repository, review: Review, target: str | None) -> Diff:
@@ -116,6 +123,18 @@ def starting_base(base: str | None) -> BaseMode:
     return BaseMode.MERGE_BASE if base is not None else BaseMode.HEAD
 
 
+def opened(
+    store: ReviewStore, listing: Listing, repository: Repository, new: bool, review_id: str | None
+) -> Stored | None:
+    """The review to open: the one `review_id` names, none for a `new` one, or else this worktree's latest."""
+    if review_id is not None:
+        return store.find(review_id)
+    if new:
+        return None
+    found = latest(listing.reviews, repository)
+    return None if found is None else store.load(found.id)
+
+
 @command(
     "review",
     flag("--new", summary="Start a new review, rather than resuming this worktree's latest."),
@@ -126,13 +145,8 @@ async def review_command(workspace: Workspace, new: bool, review_id: str | None,
     """Review this worktree's changes (the default command)."""
     repository = await find_repository(Path.cwd())
     target = await target_branch(repository, base)
-    stored = (
-        workspace.store.find(review_id)
-        if review_id is not None
-        else None
-        if new
-        else latest(workspace.store, repository)
-    )
+    listing = workspace.store.listed()
+    stored = opened(workspace.store, listing, repository, new, review_id)
     if stored is None:
         mode = starting_base(base)
         review = Review.start(new_id(), repository.common_dir, repository.worktree, repository.branch, mode, now())
@@ -146,7 +160,15 @@ async def review_command(workspace: Workspace, new: bool, review_id: str | None,
         diff = None
     # The streams are read here, not bound as `app`'s defaults are, so a test can give it a pseudo-terminal.
     await app(
-        assess_app(repository, target, open_review, workspace.preferences, workspace.preferences.load(), diff),
+        assess_app(
+            repository,
+            target,
+            open_review,
+            workspace.preferences,
+            workspace.preferences.load(),
+            diff,
+            listing.unreadable,
+        ),
         input_stream=sys.stdin,
         output_stream=sys.stdout,
         title="assess-diff",
@@ -165,7 +187,9 @@ async def review_command(workspace: Workspace, new: bool, review_id: str | None,
 async def list_command(workspace: Workspace) -> int:
     """List this repository's reviews, this worktree's first, each most recently updated first."""
     repository = await find_repository(Path.cwd())
-    for review in for_project(workspace.store.reviews(), repository.common_dir, repository.worktree):
+    listing = workspace.store.listed()
+    report_unreadable(workspace.streams, listing.unreadable)
+    for review in for_project(listing.reviews, repository.common_dir, repository.worktree):
         here = "*" if review.worktree == repository.worktree else " "
         updated = review.updated.astimezone().strftime("%Y-%m-%d %H:%M")
         comments = f"{len(review.comments)} comment" + ("" if len(review.comments) == 1 else "s")
@@ -180,7 +204,11 @@ async def list_command(workspace: Workspace) -> int:
 async def show_command(workspace: Workspace, review_id: str | None) -> int:
     """Print a review as Markdown: this worktree's latest, unless an id is given."""
     repository = await find_repository(Path.cwd())
-    stored = workspace.store.find(review_id) if review_id is not None else latest(workspace.store, repository)
+    listing = workspace.store.listed()
+    if review_id is None:
+        # Only when choosing the latest, which might have been one of them; a review asked for by id is just that one.
+        report_unreadable(workspace.streams, listing.unreadable)
+    stored = opened(workspace.store, listing, repository, False, review_id)
     if stored is None:
         workspace.streams.stderr.write("This worktree has no reviews yet; `assess-diff` starts one.\n")
         return 1
@@ -191,10 +219,10 @@ async def show_command(workspace: Workspace, review_id: str | None) -> int:
 
 @command("delete", argument("id", once(STR), summary="The review's id, or the start of it."))
 async def delete_command(workspace: Workspace, review_id: str) -> int:
-    """Delete a review."""
-    stored = workspace.store.find(review_id)
-    workspace.store.delete(stored.review.id)
-    workspace.streams.stdout.write(f"Deleted review {stored.review.id}\n")
+    """Delete a review, even one whose file can't be read."""
+    found = workspace.store.matching(review_id)
+    workspace.store.delete(found)
+    workspace.streams.stdout.write(f"Deleted review {found}\n")
     return 0
 
 

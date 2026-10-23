@@ -33,8 +33,10 @@ from assess_diff.review import NewAnchor
 from assess_diff.review import OldAnchor
 from assess_diff.review import Review
 from assess_diff.review import edit_summary
+from assess_diff.storage import Listing
 from assess_diff.storage import OpenReview
 from assess_diff.storage import ReviewStore
+from assess_diff.storage import Unreadable
 from assess_diff.ui.app import INITIAL_SESSION
 from assess_diff.ui.app import Jumping
 from assess_diff.ui.app import Managing
@@ -45,6 +47,9 @@ from assess_diff.ui.app import copied
 from assess_diff.ui.app import key_hints
 from assess_diff.ui.app import other_base
 from assess_diff.ui.app import status_line
+from assess_diff.ui.app import unreadable_notice
+from assess_diff.ui.pills import ON_SCREEN
+from assess_diff.ui.pills import key_pills
 from assess_diff.ui.pills import pills
 from assess_diff.ui.theme_picker import Query
 from tests.builders import added
@@ -232,11 +237,21 @@ async def test_d_twice_deletes_the_comment_under_the_cursor(harness: Harness) ->
     assert "press d again" not in harness.frames[1]
 
 
-async def test_d_then_another_key_keeps_the_comment(harness: Harness) -> None:
-    await harness.run([TAB, ENTER, *typed("kept"), ESCAPE, *keys("d", "x", "d"), harness.shot()])
+@pytest.mark.parametrize("other", ["x", Key.Right, Key.Left, "h", "l", "0"])
+async def test_d_then_another_key_keeps_the_comment(harness: Harness, other: str) -> None:
+    await harness.run([TAB, ENTER, *typed("kept"), ESCAPE, *keys("d", other, "d"), harness.shot()])
 
     assert [c.body for c in harness.review().comments] == ["kept"]
     assert "press d again to delete #1" in harness.frames[0]
+
+
+async def test_d_then_choosing_a_file_in_the_picker_keeps_the_comment(harness: Harness) -> None:
+    await harness.run([harness.shot()])
+    entry = where(harness.frames[0], "? notes.md")
+
+    await harness.run([TAB, ENTER, *typed("kept"), ESCAPE, *keys("d"), *click(entry.x, entry.y), harness.shot()])
+
+    assert "press d again" not in harness.frames[1]
 
 
 async def test_r_edits_the_summary(harness: Harness) -> None:
@@ -806,6 +821,29 @@ def test_key_hints_list_the_diffs_keys() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("count", "notice"),
+    [
+        (0, None),
+        (1, "1 review file can't be read; o lists it"),
+        (2, "2 review files can't be read; o lists them"),
+    ],
+)
+def test_unreadable_notice_counts_the_files_and_says_where_they_are(count: int, notice: str | None) -> None:
+    files = tuple(Unreadable(Path(f"/data/{index}.json"), "broken") for index in range(count))
+
+    assert unreadable_notice(files) == notice
+
+
+async def test_the_app_starts_saying_a_review_file_cant_be_read(harness: Harness) -> None:
+    harness.store.directory.mkdir(parents=True)
+    (harness.store.directory / "garbled.json").write_text("not json")
+
+    await harness.run([harness.shot()])
+
+    assert "1 review file can't be read; o lists it" in harness.frames[0]
+
+
 def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
     assert key_hints(INITIAL_SESSION, False) == ()
 
@@ -816,7 +854,7 @@ def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
         (replace(INITIAL_SESSION, naming=Naming(HANDLE, "draft")), ("enter rename", "esc keep the old name")),
         (replace(INITIAL_SESSION, jumping=Jumping(HANDLE, "4")), ("type a number", "enter go", "esc close")),
         (
-            replace(INITIAL_SESSION, managing=Managing(HANDLE, ())),
+            replace(INITIAL_SESSION, managing=Managing(HANDLE, Listing((), ()))),
             ("↑↓ choose", "enter open", "e rename", "dd delete", "esc close"),
         ),
         (
@@ -852,6 +890,16 @@ def test_pills_pad_each_group_on_its_background_a_bare_space_apart_keeping_its_w
         Chunk(content="2\N{NO-BREAK SPACE}files", style=on_pill),
         Chunk(content="\N{NO-BREAK SPACE}+3", style=green | on_pill),
         edge,
+    )
+
+
+def test_key_pills_draw_each_hint_in_slate_as_a_pill() -> None:
+    assert key_pills(("q quit", "c copy")) == pills(
+        (
+            (Chunk(content="q quit", style=text_color("slate", 400)),),
+            (Chunk(content="c copy", style=text_color("slate", 400)),),
+        ),
+        ON_SCREEN,
     )
 
 
@@ -898,7 +946,11 @@ async def test_the_summary_dialog_opens_over_the_diff(harness: Harness) -> None:
     assert "esc done" not in harness.frames[1]
 
 
-@pytest.mark.parametrize(("steps", "marked"), [((), "Summary"), ((TAB,), "app.py")], ids=["summary", "file"])
+@pytest.mark.parametrize(
+    ("steps", "marked"),
+    [((), "Summary"), ((TAB,), "app.py"), ((TAB, ENTER, *typed("x"), ESCAPE), "app.py")],
+    ids=["summary", "file", "comment"],
+)
 async def test_the_files_picker_marks_where_the_cursor_is_on_the_header_background(
     harness: Harness, steps: tuple[KeyPressed, ...], marked: str
 ) -> None:

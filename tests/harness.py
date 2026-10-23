@@ -11,6 +11,7 @@ from datetime import datetime
 from datetime import timedelta
 
 from counterweight import app
+from counterweight.asciicast import Recording
 from counterweight.autopilot import AutopilotStep
 from counterweight.autopilot import WaitFor
 from counterweight.controls import Quit
@@ -93,10 +94,12 @@ class Harness:
         quit_with: AutopilotStep = Quit(),
         open_review: Callable[[OpenReview], OpenReview] = lambda opened: opened,
         initial_diff: Diff | None = None,
+        recording: Recording | None = None,
     ) -> OpenReview:
         """
         Runs the app, given `initial_diff` to draw until it computes its own, until the diff shows `loaded`,
         then takes `steps`, then quits; returns the open review.
+        `recording` records every frame the app writes, which a screenshot, taken only once the app settles, can't.
         """
         repository = await find_repository(self.scratch.root)
         stored = self.store.path(REVIEW_ID)
@@ -110,9 +113,18 @@ class Harness:
             opened = OpenReview(self.store, started, None, lambda: "forked", lambda: CLOCK)
         opened = open_review(opened)
         await app(
-            assess_app(repository, target, opened, self.preferences, self.preferences.load(), initial_diff),
+            assess_app(
+                repository,
+                target,
+                opened,
+                self.preferences,
+                self.preferences.load(),
+                initial_diff,
+                self.store.listed().unreadable,
+            ),
             headless=True,
             dimensions=(WIDTH, HEIGHT),
             autopilot=[showing(loaded), *steps, quit_with],
+            recording=recording,
         )
         return opened

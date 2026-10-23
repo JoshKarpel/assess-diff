@@ -301,6 +301,33 @@ def test_parse_diff_rejects_a_line_where_a_hunk_header_belongs() -> None:
         parse_diff(text)
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["carriage\r", "form\x0cfeed", "line\u2028separator", "paragraph\u2029separator", "next\x85line"],
+)
+def test_parse_diff_splits_lines_only_on_line_feeds(text: str) -> None:
+    diff = f"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-{text}\n+{text}!\n"
+
+    (change,) = parse_diff(diff)
+
+    assert change.hunks == (Hunk(1, 1, 1, 1, (text,), (f"{text}!",)),)
+
+
+async def test_a_crlf_files_changed_lines_keep_their_carriage_returns_as_its_context_does(scratch: Scratch) -> None:
+    scratch.write("dos.txt", b"one\r\ntwo\r\nthree\r\n")
+    scratch.commit()
+    scratch.write("dos.txt", b"one\r\nTWO\r\nthree\r\n")
+
+    (file,) = (await head_diff(scratch)).files
+
+    assert [(line.kind, line.text) for line in file.lines] == [
+        (LineKind.CONTEXT, "one\r"),
+        (LineKind.REMOVED, "two\r"),
+        (LineKind.ADDED, "TWO\r"),
+        (LineKind.CONTEXT, "three\r"),
+    ]
+
+
 def test_parse_diff_splits_several_files() -> None:
     text = "diff --git a/one b/one\n--- a/one\n+++ b/one\ndiff --git a/two b/two\n--- a/two\n+++ b/two\n"
 

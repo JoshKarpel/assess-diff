@@ -1,6 +1,7 @@
 """
 The review manager: a dialog over the app listing this project's reviews, this worktree's first,
-to start a new review, open another, rename one, or delete one.
+to start a new review, open another, rename one, or delete one,
+and under them the files in the store that can't be read as reviews.
 """
 
 from __future__ import annotations
@@ -32,10 +33,12 @@ from counterweight.keys import Key
 from counterweight.styles.utilities import *
 
 from assess_diff.review import Review
+from assess_diff.storage import Unreadable
 from assess_diff.ui.pills import ON_DIALOG
 from assess_diff.ui.pills import key_pills
 
 SHOWN_ROWS = 14
+SHOWN_UNREADABLE = 4
 
 dialog_box = position_absolute | inset(0) | margin_auto | fit_content_height | z(1)
 
@@ -77,6 +80,18 @@ def entry_chunks(review: Review, is_open: bool, is_here: bool) -> tuple[Chunk, .
     )
 
 
+def unreadable_chunks(file: Unreadable) -> tuple[Chunk, ...]:
+    """
+    A file that can't be read, by its name, and the first line of why,
+    since a validation error goes on for a line per field; `assess-diff list` prints all of it.
+    """
+    return (
+        Chunk(content="! ", style=text_color("red", 400)),
+        Chunk(content=file.path.name),
+        Chunk(content=f"  {file.reason.partition('\n')[0]}", style=text_dim),
+    )
+
+
 @component
 def name_field(renaming: Renaming, set_name: Callable[[Callable[[str], str]], None]) -> Text:
     field = use_text_input(renaming.name, set_name, handle=renaming.handle)
@@ -96,12 +111,16 @@ def name_field(renaming: Renaming, set_name: Callable[[Callable[[str], str]], No
 @component
 def review_manager(
     reviews: tuple[Review, ...],
+    unreadable: tuple[Unreadable, ...],
     open_id: str,
     worktree: str,
     handle: FocusHandle,
     actions: ManagerActions,
 ) -> Div:
-    """`reviews` are this project's, this worktree's first; `open_id` is the one the app has open."""
+    """
+    `reviews` are this project's, this worktree's first; `open_id` is the one the app has open.
+    `unreadable` are the files in the store that can't be read, whichever project they're of, since that can't be told.
+    """
     use_focus(handle=handle)
     choice, set_choice = use_state(Choice(highlighted=0, renaming=None, confirming_delete=None))
     highlighted_entry, _ = use_state(ElementHandle)
@@ -158,7 +177,9 @@ def review_manager(
 
     def entry(index: int, review: Review | None) -> tuple[Text | Component, ...]:
         is_highlighted = index == highlighted
-        style = pad_x(1) | text_wrap_none | (text_bg("indigo", 800) if is_highlighted else default)
+        style = (
+            pad_x(1) | text_wrap_none | text_overflow_ellipsis | (text_bg("indigo", 800) if is_highlighted else default)
+        )
         handle_for = highlighted_entry if is_highlighted else None
         if review is None:
             return (
@@ -201,6 +222,24 @@ def review_manager(
                 style=col | max_height(SHOWN_ROWS) | overflow_y_scroll,
                 on_input=scroll_on_wheel(1),
                 children=tuple(row for index, review in enumerate((None, *reviews)) for row in entry(index, review)),
+            ),
+            *(
+                (
+                    Text(content="Can't read", style=text_bold | pad_x(1) | margin_top(1)),
+                    Div(
+                        style=col | max_height(SHOWN_UNREADABLE) | overflow_y_scroll,
+                        on_input=scroll_on_wheel(1),
+                        children=tuple(
+                            Text(
+                                content=unreadable_chunks(file),
+                                style=pad_x(1) | text_wrap_none | text_overflow_ellipsis,
+                            )
+                            for file in unreadable
+                        ),
+                    ),
+                )
+                if unreadable
+                else ()
             ),
             Text(content=key_pills(footer, ON_DIALOG), style=text_wrap_stable | pad_x(1) | text_bg("slate", 900)),
         ),

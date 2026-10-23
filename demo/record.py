@@ -225,7 +225,7 @@ async def record(cast: Path) -> None:
         )
         preferences = PreferencesFile(Path(directory) / "preferences.json")
         await app(
-            assess_app(repository, "main", open_review, preferences, preferences.load(), diff),
+            assess_app(repository, "main", open_review, preferences, preferences.load(), diff, ()),
             headless=True,
             dimensions=DIMENSIONS,
             clock=FrozenClock(CLOCK),

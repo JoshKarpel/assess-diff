@@ -60,6 +60,10 @@ Each review is one JSON file in `$XDG_DATA_HOME/assess-diff/reviews/`
 (`~/.local/share/assess-diff/reviews/` when that's unset),
 named by an id that `--review`, `show`, and `delete` accept any unambiguous start of, as git takes a commit.
 Nothing deletes a review but you.
+A file that can't be read as a review, written by a newer `assess-diff` or edited by hand,
+is left as it is and never stops the others from opening:
+the app says so as it starts and the review manager lists it,
+`list` and `show` name it on standard error, and `delete` removes it.
 
 Every edit is saved before it's drawn, so a crash or a stray Ctrl+C loses nothing.
 If two `assess-diff`s have the same review open, the second to save keeps its version as a new review and says so,
@@ -106,4 +110,4 @@ under tmux it needs `set -g set-clipboard on`.
 
 ## Developing
 
-See [`CLAUDE.md`](CLAUDE.md) for the commands and conventions.
+See [`CLAUDE.md`](https://github.com/JoshKarpel/assess-diff/blob/main/CLAUDE.md) for the commands and conventions.

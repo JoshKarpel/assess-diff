@@ -113,10 +113,10 @@ async def test_latest_is_this_worktrees_review_even_with_newer_ones_elsewhere(
     project.save(Review.start("0199bbbb-there", scratch.root / ".git", other_worktree, "x", BaseMode.HEAD, newer), None)
     project.save(Review.start("0199cccc-theirs", other_project, scratch.root, "y", BaseMode.HEAD, newer), None)
 
-    found = latest(project, await find_repository(scratch.root))
+    found = latest(project.listed().reviews, await find_repository(scratch.root))
 
     assert found is not None
-    assert found.review.id == "0199aaaa-mine"
+    assert found.id == "0199aaaa-mine"
 
 
 def test_list_shows_this_projects_reviews(project: ReviewStore, scratch: Scratch) -> None:
@@ -139,6 +139,40 @@ def test_show_prints_the_latest_review_as_markdown(project: ReviewStore, scratch
     assert out.endswith("## 1. `app.py:1`\n\nWhy two?\n")
 
 
+def merge_base_review(project: ReviewStore, scratch: Scratch) -> str:
+    """Starts a branch a commit ahead of `main` with a review last viewed against the merge base; returns the base."""
+    base = scratch.git("rev-parse", "--short=7", "HEAD").strip()
+    scratch.git("checkout", "--quiet", "-b", "feature")
+    scratch.commit("ahead")
+    review = Review.start(
+        "0199cccc-merged", scratch.root / ".git", scratch.root, "feature", BaseMode.MERGE_BASE, STARTED
+    )
+    project.save(review, None)
+    return base
+
+
+def test_show_reads_a_review_against_the_merge_base_it_was_last_viewed_against(
+    project: ReviewStore, scratch: Scratch
+) -> None:
+    base = merge_base_review(project, scratch)
+
+    _, out, _ = invoke("show")
+
+    assert out.startswith(f"# Review of `feature` against `main` (merge base `{base}`)\n")
+
+
+def test_show_reads_a_merge_base_review_against_head_without_a_default_branch(
+    project: ReviewStore, scratch: Scratch
+) -> None:
+    merge_base_review(project, scratch)
+    scratch.git("branch", "-m", "main", "trunk")
+    head = scratch.git("rev-parse", "--short=7", "HEAD").strip()
+
+    _, out, _ = invoke("show")
+
+    assert out.startswith(f"# Review of `feature` against `HEAD` (`{head}`)\n")
+
+
 def test_show_takes_an_id(project: ReviewStore, scratch: Scratch) -> None:
     seed(project, scratch, "0199cccc-first", "one", body="first body")
     seed(project, scratch, "0199dddd-second", "two", body="second body")
@@ -156,7 +190,7 @@ def test_delete_removes_the_review(project: ReviewStore, scratch: Scratch) -> No
     seed(project, scratch, "0199cccc-doomed", "doomed")
 
     assert invoke("delete", "0199cc") == (0, "Deleted review 0199cccc-doomed\n", "")
-    assert project.reviews() == ()
+    assert project.listed().reviews == ()
 
 
 @pytest.mark.parametrize("arguments", [["delete", "nope"], ["--review", "nope"]], ids=["named", "default"])
@@ -213,7 +247,7 @@ def test_review_new_starts_a_review_that_is_saved_only_once_written(
     code, out, _ = invoke("review", "--new", "--base", "main")
 
     assert (code, out) == (0, "Nothing was written, so no review was saved.\n")
-    assert [review.id for review in project.reviews()] == ["0199cccc-first"]
+    assert [review.id for review in project.listed().reviews] == ["0199cccc-first"]
 
 
 def test_review_opens_a_review_by_id(
@@ -245,21 +279,68 @@ def test_review_against_a_base_git_cant_resolve_still_opens(
     assert invoke("review", "--base", "no-such-branch")[0] == 0
 
 
-def test_main_reports_an_unreadable_review(
+def unreadable(store: ReviewStore) -> str:
+    """Writes a review file a newer assess-diff might have, and returns what a command says of it."""
+    store.directory.mkdir(parents=True, exist_ok=True)
+    (store.directory / "0199ffff-future.json").write_text('{"version": 99}')
+    return (
+        f"assess-diff: Can't read the review in {store.directory / '0199ffff-future.json'}: "
+        "This review is version 99, and this assess-diff reads up to version 1\n"
+    )
+
+
+def test_main_reports_an_unreadable_review_asked_for_by_id(
     project: ReviewStore, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    project.directory.mkdir(parents=True)
-    (project.directory / "future.json").write_text('{"version": 99}')
-    monkeypatch.setattr(sys, "argv", ["assess-diff", "list"])
+    message = unreadable(project)
+    monkeypatch.setattr(sys, "argv", ["assess-diff", "show", "0199ffff"])
 
     with pytest.raises(SystemExit) as exited:
         main()
 
-    assert (exited.value.code, capsys.readouterr().err) == (
-        1,
-        f"assess-diff: Can't read the review in {project.directory / 'future.json'}: "
-        "This review is version 99, and this assess-diff reads up to version 1\n",
-    )
+    assert (exited.value.code, capsys.readouterr().err) == (1, message)
+
+
+def test_list_reports_an_unreadable_review_and_lists_the_rest(project: ReviewStore, scratch: Scratch) -> None:
+    seed(project, scratch, "0199cccc-first", "first look")
+    message = unreadable(project)
+
+    code, out, err = invoke("list")
+
+    assert (code, "first look" in out, err) == (0, True, message)
+
+
+def test_show_reports_an_unreadable_review_and_shows_the_latest(project: ReviewStore, scratch: Scratch) -> None:
+    seed(project, scratch, "0199cccc-first", "first look", body="Why two?")
+    message = unreadable(project)
+
+    code, out, err = invoke("show")
+
+    assert (code, out.endswith("Why two?\n"), err) == (0, True, message)
+
+
+def test_delete_removes_a_review_that_cant_be_read(project: ReviewStore) -> None:
+    unreadable(project)
+
+    assert invoke("delete", "0199ff") == (0, "Deleted review 0199ffff-future\n", "")
+    assert project.listed().unreadable == ()
+
+
+@pytest.mark.parametrize("arguments", [[], ["--new"]], ids=["latest", "new"])
+def test_review_opens_beside_an_unreadable_review(
+    project: ReviewStore,
+    scratch: Scratch,
+    terminal: Terminal,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+) -> None:
+    seed(project, scratch, "0199cccc-first", "resumed")
+    unreadable(project)
+    quit_at_once(terminal, monkeypatch)
+
+    code, _, _ = invoke(*arguments)
+
+    assert code == 0
 
 
 @pytest.mark.parametrize(

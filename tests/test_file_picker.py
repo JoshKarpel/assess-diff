@@ -8,16 +8,24 @@ from counterweight.events import KeyPressed
 from counterweight.keys import Key
 from counterweight.styles.utilities import text_color
 
+from assess_diff.navigation import CommentAt
+from assess_diff.navigation import HeaderAt
+from assess_diff.navigation import Position
+from assess_diff.navigation import RowAt
+from assess_diff.navigation import SummaryAt
 from assess_diff.preferences import PreferencesFile
 from assess_diff.storage import ReviewStore
 from assess_diff.ui.file_picker import DirectoryRow
 from assess_diff.ui.file_picker import FileRow
 from assess_diff.ui.file_picker import directory_entry
 from assess_diff.ui.file_picker import file_entry
+from assess_diff.ui.file_picker import marked
 from assess_diff.ui.file_picker import tree_rows
 from tests.builders import added
+from tests.builders import file_comment
 from tests.builders import modified
 from tests.builders import removed
+from tests.builders import review
 from tests.conftest import Scratch
 from tests.harness import Harness
 from tests.harness import keys
@@ -28,6 +36,23 @@ CHANGED = modified("src/b.py", removed(4, "four"), added(4, "vier"), added(5, "f
 STATUS = Chunk(content="M ", style=text_color("amber", 300))
 ENTER = KeyPressed(key=Key.Enter)
 ESCAPE = KeyPressed(key=Key.Escape)
+
+
+@pytest.mark.parametrize(
+    ("cursor", "entry"),
+    [
+        (SummaryAt(), SummaryAt()),
+        (HeaderAt("src/a.py"), HeaderAt("src/a.py")),
+        (RowAt("src/b.py", 7), HeaderAt("src/b.py")),
+        (CommentAt(2), HeaderAt("src/c.py")),
+        (CommentAt(9), None),
+    ],
+    ids=["summary", "header", "row", "comment", "comment-gone"],
+)
+def test_marked_is_the_entry_of_the_summary_or_the_file_the_cursor_is_in(
+    cursor: Position, entry: HeaderAt | SummaryAt | None
+) -> None:
+    assert marked(cursor, review(file_comment(1, "src/a.py"), file_comment(2, "src/c.py"))) == entry
 
 
 def test_file_entry_shows_the_status_and_the_name() -> None:

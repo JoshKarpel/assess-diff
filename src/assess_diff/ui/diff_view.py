@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from itertools import pairwise
 
 from counterweight.components import Component
 from counterweight.components import component
@@ -49,9 +50,11 @@ from assess_diff.navigation import HeaderAt
 from assess_diff.navigation import Position
 from assess_diff.navigation import RowAt
 from assess_diff.navigation import SummaryAt
+from assess_diff.navigation import ViewMode
 from assess_diff.review import Comment
 from assess_diff.ui.pills import ON_DIALOG
 from assess_diff.ui.pills import key_pills
+from assess_diff.ui.rows import Extent
 from assess_diff.ui.rows import Highlight
 from assess_diff.ui.rows import digits_for
 from assess_diff.ui.rows import measured_lines
@@ -341,6 +344,22 @@ def is_near(extent: Region, view: Region) -> bool:
     return extent.bottom > view.top - view.height and extent.top < view.bottom + view.height
 
 
+def near_cursor(document: Document, cursor: Position, reach: int) -> frozenset[str]:
+    """
+    The paths of the files with a position within `reach` positions of `cursor`.
+    Every position takes at least a line, so with the cursor in a view and `reach` twice the view's height,
+    these are all the files `is_near` the view, known before the layout that a move to a far file scrolls to.
+    """
+    at = document.indexes[cursor]
+    starts = [document.indexes[HeaderAt(layout.file.path)] for layout in document.files]
+    spans = pairwise([*starts, len(document.positions)])
+    return frozenset(
+        layout.file.path
+        for layout, (start, stop) in zip(document.files, spans, strict=True)
+        if start - reach <= at < stop + reach
+    )
+
+
 @component
 def file_near_view(
     layout: FileLayout,
@@ -352,21 +371,22 @@ def file_near_view(
     theme: str,
     width: int,
     offset: int,
+    is_near_cursor: bool,
     view: Region,
     cursor_element: ElementHandle,
     actions: Actions,
 ) -> Div:
     """
-    A file scrolled `offset` cells sideways while it's near the pane's `view`, as `is_near` says,
+    A file scrolled `offset` cells sideways while it's near the cursor or near the pane's `view`, as `is_near` says,
     so a sideways press redraws only the files near what shows rather than every file in the diff.
-    Away from the view it keeps the offset it was last drawn at, and catches up in the render after
-    a scroll brings it near, which is why the margin is a whole view: a page's scroll lands within it.
+    Away from both it keeps the offset it was last drawn at, and catches up in the render after
+    a scroll brings it near the view, which is why the margin is a whole view: a wheel's scroll lands within it.
+    A move to a far file brings the cursor with it, so the files there are drawn at the offset in the move's own frame.
     """
-    # Its rects move with every vertical scroll, so this renders again each time,
-    # and `file_view` behind it only when the offset it's given changes.
-    rects = use_rects()
     drawn = use_ref(offset)
-    if is_near(rects.margin, view):
+    # Its rects move with every vertical scroll, and reading them renders it again each time,
+    # so they're read only while it has an offset to catch up on, which is never until the pane scrolls sideways.
+    if drawn.current != offset and (is_near_cursor or is_near(use_rects().margin, view)):
         drawn.current = offset
     return Div(
         style=col,
@@ -456,6 +476,29 @@ def summary_dialog(summary: str, handle: FocusHandle, actions: Actions) -> Div:
     )
 
 
+def sideways(event: InputEvent, limit: int) -> Callable[[int], int] | None:
+    """
+    How `event` moves the sideways scroll, kept within `0` to `limit`, or `None` for an event that doesn't.
+    It's a function of the offset rather than a new one, since several events can arrive between two renders,
+    and each has to move on from where the last left it, not from where the render drew it.
+    """
+    match event:
+        case KeyPressed(key="0"):
+            return lambda _: 0
+        case KeyPressed(key=Key.Left | "h"):
+            by = -SIDEWAYS_KEY_STEP
+        case KeyPressed(key=Key.Right | "l"):
+            by = SIDEWAYS_KEY_STEP
+        case MouseScrolledLeft() | MouseScrolledUp(is_shift_held=True):
+            by = -SIDEWAYS_WHEEL_STEP
+        case MouseScrolledRight() | MouseScrolledDown(is_shift_held=True):
+            by = SIDEWAYS_WHEEL_STEP
+        case _:
+            return None
+    # From the offset as drawn, within the limit, so a step back from past it moves what shows.
+    return lambda offset: max(0, min(min(offset, limit) + by, limit))
+
+
 @component
 def diff_pane(
     document: Document | None,
@@ -480,35 +523,19 @@ def diff_pane(
     width = rects.content.width
     pane = col | fill(1) | overflow_scroll | pad_x(1)
     offset, set_offset = use_state(0)
-    limit = use_memo(
-        lambda: (
-            0
-            if document is None
-            else max(
-                (overflow(layout.rows, digits_for(layout.file.lines), width) for layout in document.files), default=0
-            )
-        ),
-        (document, width),
-    )
+    diff = None if document is None else document.diff
+    # On the diff alone, so moving a comment, switching view or resizing the pane measures nothing again.
+    extents = use_memo(lambda: () if diff is None else tuple(Extent.of(file.lines) for file in diff.files), (diff,))
+    is_split = document is not None and document.mode is ViewMode.SPLIT
+    limit = max((overflow(extent, is_split, width) for extent in extents), default=0)
     # Kept as it was scrolled, and only drawn within the limit, so a wider pane or a shorter diff shows less of
     # the scroll than was asked for rather than forgetting it.
     shown_offset = min(offset, limit)
 
     def scroll_sideways(event: InputEvent, receiver: Receiver) -> InputResponse:
-        match event:
-            case KeyPressed(key=Key.Left | "h"):
-                by = -SIDEWAYS_KEY_STEP
-            case KeyPressed(key=Key.Right | "l"):
-                by = SIDEWAYS_KEY_STEP
-            case KeyPressed(key="0"):
-                by = -shown_offset
-            case MouseScrolledLeft() | MouseScrolledUp(is_shift_held=True):
-                by = -SIDEWAYS_WHEEL_STEP
-            case MouseScrolledRight() | MouseScrolledDown(is_shift_held=True):
-                by = SIDEWAYS_WHEEL_STEP
-            case _:
-                return None
-        set_offset(max(0, min(shown_offset + by, limit)))
+        if (scroll := sideways(event, limit)) is None:
+            return None
+        set_offset(scroll)
         return ()
 
     top = summary_box(summary, cursor == SummaryAt(), cursor_element, actions)
@@ -532,6 +559,7 @@ def diff_pane(
             case _:
                 return None, None
 
+    near = near_cursor(document, cursor, 2 * rects.padding.height)
     files = []
     for layout in document.files:
         file_cursor, selected = in_file(layout.file.path)
@@ -546,6 +574,7 @@ def diff_pane(
                 theme,
                 width,
                 shown_offset,
+                layout.file.path in near,
                 rects.padding,
                 cursor_element,
                 actions,
@@ -572,6 +601,8 @@ def diff_pane(
 
     return Div(
         style=pane,
-        on_input=first(scroll_sideways, on_key, scroll_on_wheel()),
+        # `on_key` sees every key first, sideways ones included, since it disarms a pending delete on any but `d`;
+        # it handles none of the keys `scroll_sideways` does, so they carry on to it.
+        on_input=first(on_key, scroll_sideways, scroll_on_wheel()),
         children=(top, *files, *orphans),
     )

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
+from counterweight.asciicast import Recording
 from counterweight.controls import FocusOn
+from counterweight.controls import Marker
 from counterweight.elements import Chunk
 from counterweight.elements import Text
+from counterweight.events import InputEvent
 from counterweight.events import KeyPressed
 from counterweight.events import MouseScrolledDown
 from counterweight.events import MouseScrolledLeft
@@ -29,6 +33,12 @@ from assess_diff.diff import FileDiff
 from assess_diff.diff import FileStatus
 from assess_diff.diff import LineKind
 from assess_diff.navigation import FileLayout
+from assess_diff.navigation import HeaderAt
+from assess_diff.navigation import Position as CursorPosition
+from assess_diff.navigation import RowAt
+from assess_diff.navigation import SummaryAt
+from assess_diff.navigation import ViewMode
+from assess_diff.navigation import build_document
 from assess_diff.preferences import PreferencesFile
 from assess_diff.storage import ReviewStore
 from assess_diff.ui.diff_view import COMMENT_STYLES
@@ -39,11 +49,15 @@ from assess_diff.ui.diff_view import comment_title
 from assess_diff.ui.diff_view import editor
 from assess_diff.ui.diff_view import header_chunks
 from assess_diff.ui.diff_view import is_near
+from assess_diff.ui.diff_view import near_cursor
 from assess_diff.ui.diff_view import runs
+from assess_diff.ui.diff_view import sideways
 from assess_diff.ui.rows import Highlight
 from tests.builders import added
 from tests.builders import comment
 from tests.builders import context
+from tests.builders import diff_of
+from tests.builders import modified
 from tests.builders import removed
 from tests.conftest import Scratch
 from tests.harness import Harness
@@ -225,8 +239,9 @@ async def test_zero_scrolls_back_to_the_start_of_the_lines(wide: Harness) -> Non
     assert "      2 + value = compute(" in wide.frames[0]
 
 
-async def test_scrolling_stops_where_the_widest_line_ends(wide: Harness) -> None:
-    await wide.run([*keys(*["l"] * 40), wide.shot(), *keys("h"), wide.shot()])
+@pytest.mark.parametrize("before", [(), ("s",)], ids=["unified", "split"])
+async def test_scrolling_stops_where_the_widest_line_ends(wide: Harness, before: tuple[str, ...]) -> None:
+    await wide.run([*keys(*before, *["l"] * 40), wide.shot(), *keys("h"), wide.shot()])
 
     assert [any(line.rstrip().endswith("# END") for line in frame.splitlines()) for frame in wide.frames] == [
         True,
@@ -267,6 +282,61 @@ async def test_the_scroll_keys_type_into_a_comment(wide: Harness) -> None:
 
     assert [c.body for c in wide.review().comments] == ["hl0"]
     assert "      2 + value = compute(" in wide.frames[0]
+
+
+RIGHT = KeyPressed(key=Key.Right)
+
+
+@pytest.mark.parametrize(
+    ("event", "offset", "limit", "expected"),
+    [
+        (RIGHT, 5, 100, 13),
+        (KeyPressed(key="l"), 5, 100, 13),
+        (KeyPressed(key=Key.Left), 21, 100, 13),
+        (KeyPressed(key="h"), 21, 100, 13),
+        (KeyPressed(key="0"), 21, 100, 0),
+        (MouseScrolledRight(absolute=IN_THE_DIFF), 5, 100, 9),
+        (MouseScrolledDown(absolute=IN_THE_DIFF, is_shift_held=True), 5, 100, 9),
+        (MouseScrolledLeft(absolute=IN_THE_DIFF), 21, 100, 17),
+        (MouseScrolledUp(absolute=IN_THE_DIFF, is_shift_held=True), 21, 100, 17),
+        (RIGHT, 95, 99, 99),
+        (KeyPressed(key=Key.Left), 3, 99, 0),
+        (KeyPressed(key=Key.Left), 50, 30, 22),
+    ],
+    ids=[
+        "right",
+        "l",
+        "left",
+        "h",
+        "zero",
+        "wheel-right",
+        "shift-wheel-down",
+        "wheel-left",
+        "shift-wheel-up",
+        "stops-at-the-limit",
+        "stops-at-the-start",
+        "back-from-past-the-limit",
+    ],
+)
+def test_sideways_moves_the_offset_it_is_given(event: InputEvent, offset: int, limit: int, expected: int) -> None:
+    scroll = sideways(event, limit)
+
+    assert scroll is not None
+    assert scroll(offset) == expected
+
+
+def test_sideways_steps_add_up_when_several_come_between_renders() -> None:
+    scroll = sideways(RIGHT, 100)
+
+    assert scroll is not None
+    assert scroll(scroll(scroll(0))) == 24
+
+
+@pytest.mark.parametrize(
+    "event", [KeyPressed(key="x"), KeyPressed(key=Key.Down), MouseScrolledDown(absolute=IN_THE_DIFF)]
+)
+def test_sideways_leaves_other_events_alone(event: InputEvent) -> None:
+    assert sideways(event, 100) is None
 
 
 VIEW = Region(left=0, top=10, right=80, bottom=30)
@@ -311,3 +381,64 @@ async def test_a_file_far_from_the_view_catches_up_with_the_scroll_once_it_comes
     await many.run([*keys("l", Key.End), showing("…ompute_5("), many.shot()])
 
     assert "40 + …ompute_5(argument_0" in many.frames[0]
+
+
+FIVE_ROWS = tuple(context(n, n, f"line {n}") for n in range(1, 6))
+THREE_FILES = build_document(
+    diff_of(modified("a.py", *FIVE_ROWS), modified("b.py", *FIVE_ROWS), modified("c.py", *FIVE_ROWS)),
+    (),
+    ViewMode.UNIFIED,
+)
+"""The summary at 0, then each file's header and its five rows: `a.py` at 1 to 6, `b.py` at 7 to 12, `c.py` at 13 to 18."""
+
+
+@pytest.mark.parametrize(
+    ("cursor", "reach", "near"),
+    [
+        (RowAt("b.py", 3), 0, {"b.py"}),
+        (RowAt("b.py", 3), 4, {"b.py", "c.py"}),
+        (RowAt("b.py", 3), 5, {"a.py", "b.py", "c.py"}),
+        (HeaderAt("b.py"), 1, {"a.py", "b.py"}),
+        (RowAt("b.py", 4), 1, {"b.py", "c.py"}),
+        (SummaryAt(), 0, set()),
+        (SummaryAt(), 1, {"a.py"}),
+    ],
+    ids=[
+        "own-file",
+        "short-of-the-file-before",
+        "reaching-the-file-before",
+        "header",
+        "last-row",
+        "summary",
+        "past-summary",
+    ],
+)
+def test_near_cursor_is_the_files_within_reach_of_its_position(
+    cursor: CursorPosition, reach: int, near: set[str]
+) -> None:
+    assert near_cursor(THREE_FILES, cursor, reach) == near
+
+
+def frames_after_marker(cast: Path) -> int:
+    """How many frames a recording holds after its marker."""
+    events = [json.loads(line) for line in cast.read_text().splitlines()[1:]]
+    marker = next(index for index, event in enumerate(events) if event[1] == "m")
+    return sum(event[1] == "o" for event in events[marker + 1 :])
+
+
+@pytest.mark.parametrize(
+    ("before", "jump", "landed"),
+    [((), Key.End, "…ompute_5("), ((Key.End,), Key.Home, "Review summary")],
+    ids=["end", "home"],
+)
+async def test_a_jump_while_scrolled_sideways_draws_where_it_lands_scrolled_in_one_frame(
+    many: Harness, tmp_path: Path, before: tuple[Key, ...], jump: Key, landed: str
+) -> None:
+    cast = tmp_path / "jump.cast"
+
+    await many.run(
+        [*keys(*before, "l"), showing("…"), Marker("jump"), *keys(jump), showing(landed)],
+        recording=Recording(cast),
+    )
+
+    assert frames_after_marker(cast) == 1, "a frame of the files at the old offset, then one catching up, is two"

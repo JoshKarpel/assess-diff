@@ -66,6 +66,12 @@ Mutant numbers change with every source edit,
 so each entry names the function and the change instead.
 A survivor that matches no entry is a hole until shown otherwise.
 
+### `cli.py`
+
+- `current_diff`: the `"HEAD"` in `target or "HEAD"` respelled (`"XXHEADXX"`, `"head"`).
+  It's passed only when `target` is `None`, which makes the mode `BaseMode.HEAD`,
+  and `resolve_base` resolves `HEAD` without reading its target.
+
 ### `diff.py`
 
 - `header_path`: the quoted-path scan starts at `end = 2` instead of `1`.
@@ -95,6 +101,19 @@ A survivor that matches no entry is a hole until shown otherwise.
 - `use_stable_actions`: `use_ref(actions)` becomes `use_ref(None)`.
   The next line sets `latest.current = actions` on every render, the first included,
   before anything reads the ref.
+- `near_cursor`: `zip(..., strict=True)` weakened to `strict=None`, `strict=False`, or dropped.
+  `pairwise` over the files' starts and the end yields exactly one span per file,
+  so both arguments are the same length; `strict=True` guards that rather than changing anything.
+
+### `ui/rows.py`
+
+- `window`: any mutant that widens the slice of chunks the window is cut from:
+  `first` lowered (`- 2`), `stop` set to `None` or found from `offset + width + 2`,
+  or `lo` or `hi` dropped from the `bisect_left` that finds `stop`.
+  The slice only spares `scrolled` and `fitted` the chunks outside the window,
+  and cutting the window from more of the text draws the same cells:
+  `test_window_draws_what_scrolling_and_fitting_the_whole_text_draws` compares it with cutting from all of it.
+  These cost only time, which `just bench` measures and no test does.
 
 ### `ui/syntax.py`
 

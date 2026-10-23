@@ -2,7 +2,7 @@
 How long the app takes to answer a key, on generated diffs of a few sizes.
 
 Each workload starts the whole app headless on a generated repository, as the tests do,
-then presses one key over and over, timing each press from the render before it to the render after it.
+then presses a key (or a few in turn) over and over, timing each press from the render before it to the render after it.
 The repositories are the same on every run, so runs on one machine compare.
 `just bench` runs them all; `just profile` runs one under the sampling profiler.
 """
@@ -25,13 +25,17 @@ from pathlib import Path
 from counterweight import __version__ as counterweight_version
 from counterweight.autopilot import AutopilotStep
 from counterweight.autopilot import WaitFor
+from counterweight.events import AnyEvent
 from counterweight.events import KeyPressed
+from counterweight.events import TerminalResized
 from counterweight.keys import Key
 
 from assess_diff.preferences import PreferencesFile
 from assess_diff.storage import ReviewStore
 from tests.conftest import Scratch
 from tests.conftest import init_scratch
+from tests.harness import HEIGHT
+from tests.harness import WIDTH
 from tests.harness import Harness
 
 FUNCTIONS_PER_FILE = 667
@@ -58,18 +62,30 @@ class Workload:
     name: str
     before: tuple[KeyPressed, ...]
     """Keys pressed before the timing starts."""
-    key: KeyPressed
+    keys: tuple[AnyEvent, ...]
+    """What's pressed, in turn, each timed alone."""
     presses: int
 
 
+ENTER = KeyPressed(key=Key.Enter)
+ESCAPE = KeyPressed(key=Key.Escape)
+TAB = KeyPressed(key=Key.Tab)
+RIGHT = KeyPressed(key=Key.Right)
+
 WORKLOADS = (
-    Workload("down", (), KeyPressed(key=Key.Down), 60),
-    Workload("tab", (), KeyPressed(key=Key.Tab), 30),
-    Workload("page-down", (), KeyPressed(key=Key.PageDown), 20),
+    Workload("down", (), (KeyPressed(key=Key.Down),), 60),
+    Workload("tab", (), (TAB,), 30),
+    Workload("page-down", (), (KeyPressed(key=Key.PageDown),), 20),
     # Into the first hunk's new comment, where every key is an edit saved to disk.
-    Workload("type", (KeyPressed(key=Key.Tab), KeyPressed(key=Key.Enter)), KeyPressed(key="x"), 40),
+    Workload("type", (TAB, ENTER), (KeyPressed(key="x"),), 40),
     # Short of where the widest line's end reaches the right edge, so every press scrolls.
-    Workload("right", (), KeyPressed(key=Key.Right), 30),
+    Workload("right", (), (RIGHT,), 30),
+    # A comment made on the first hunk, then dropped as empty: each moves where comments are, so the layout is rebuilt.
+    Workload("comment", (TAB,), (ENTER, ESCAPE), 20),
+    Workload("split", (), (KeyPressed(key="s"),), 10),
+    Workload("resize", (), (TerminalResized((WIDTH - 10, HEIGHT)), TerminalResized((WIDTH, HEIGHT))), 10),
+    # From one end of the diff to the other while scrolled sideways, so the files there have the scroll to catch up on.
+    Workload("jump", (RIGHT, RIGHT), (KeyPressed(key=Key.End), KeyPressed(key=Key.Home)), 10),
 )
 
 
@@ -109,8 +125,8 @@ async def press_times(scratch: Scratch, workload: Workload) -> list[float]:
 
     rendered = WaitFor(stamp, timeout=timedelta(minutes=5))
     steps: list[AutopilotStep] = [*workload.before, rendered]
-    for _ in range(workload.presses):
-        steps += [workload.key, rendered]
+    for press in range(workload.presses):
+        steps += [workload.keys[press % len(workload.keys)], rendered]
     with tempfile.TemporaryDirectory() as data:
         harness = Harness(
             scratch=scratch,

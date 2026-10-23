@@ -10,6 +10,7 @@ from hypothesis import strategies as st
 from assess_diff.diff import Line
 from assess_diff.diff import LineKind
 from assess_diff.diff import SplitRow
+from assess_diff.diff import split_rows
 from assess_diff.ui.rows import ABSENT
 from assess_diff.ui.rows import BACKGROUNDS
 from assess_diff.ui.rows import DIVIDER
@@ -17,19 +18,24 @@ from assess_diff.ui.rows import GUTTER
 from assess_diff.ui.rows import HIGHLIGHTS
 from assess_diff.ui.rows import MARKER_COLORS
 from assess_diff.ui.rows import NO_TEXT
+from assess_diff.ui.rows import Extent
 from assess_diff.ui.rows import Highlight
 from assess_diff.ui.rows import Measured
 from assess_diff.ui.rows import SyntaxLines
+from assess_diff.ui.rows import cell_width
 from assess_diff.ui.rows import digits_for
 from assess_diff.ui.rows import displayed
 from assess_diff.ui.rows import fitted
+from assess_diff.ui.rows import half_room
 from assess_diff.ui.rows import lit
 from assess_diff.ui.rows import measured_lines
 from assess_diff.ui.rows import overflow
 from assess_diff.ui.rows import row_chunks
 from assess_diff.ui.rows import scrolled
 from assess_diff.ui.rows import split_chunks
+from assess_diff.ui.rows import split_widths
 from assess_diff.ui.rows import unified_chunks
+from assess_diff.ui.rows import unified_room
 from assess_diff.ui.rows import window
 from tests.builders import added
 from tests.builders import context
@@ -194,10 +200,19 @@ def test_unstyled_text_takes_the_row_background() -> None:
         ((Chunk(content="ab"), Chunk(content="cdef")), 2, "…def"),
         ((Chunk(content="日本語"),), 1, "…本語"),
         ((Chunk(content="日本語"),), 2, "… 語"),
+        ((Chunk(content="a日"),), 1, "… "),
         ((Chunk(content="ab"),), 5, "…"),
         ((), 3, ""),
     ],
-    ids=["unscrolled", "across-chunks", "at-a-wide-grapheme", "through-a-wide-grapheme", "past-the-end", "empty"],
+    ids=[
+        "unscrolled",
+        "across-chunks",
+        "at-a-wide-grapheme",
+        "through-a-wide-grapheme",
+        "through-the-last-grapheme",
+        "past-the-end",
+        "empty",
+    ],
 )
 def test_scrolled_cuts_the_first_cells_and_marks_the_cut(chunks: tuple[Chunk, ...], offset: int, expected: str) -> None:
     assert text_of(scrolled(chunks, offset, BACKGROUNDS[LineKind.ADDED])) == expected
@@ -228,20 +243,71 @@ def test_split_row_scrolls_both_sides_alike() -> None:
     assert text_of(chunks) == "  4 - …defgh│  6 + …DEFGH"
 
 
+@pytest.mark.parametrize(("width", "room"), [(15, 5), (10, 0), (6, 0)], ids=["roomy", "exactly-full", "too-narrow"])
+def test_unified_room_is_what_the_gutter_leaves_and_never_less_than_none(width: int, room: int) -> None:
+    assert unified_room(3, width) == room
+
+
+def test_a_split_row_with_only_a_removed_line_draws_the_working_trees_side_blank() -> None:
+    line = removed(4, "gone")
+    texts = measured_lines((line,), {})
+
+    assert row_chunks(SplitRow(line, None), texts, 3, 21, 0, Highlight.NONE) == split_chunks(
+        SplitRow(line, None), texts[line], NO_TEXT, 3, 21, 0, Highlight.NONE
+    )
+
+
 @pytest.mark.parametrize(
-    ("rows", "width", "expected"),
+    ("lines", "is_split", "width", "expected"),
     [
-        ((context(1, 1, "x" * 30), context(2, 2, "short")), 20, 20),
-        ((SplitRow(None, added(1, "y" * 12)), SplitRow(removed(1, "z" * 9), None)), 21, 8),
-        ((context(1, 1, "fits"),), 20, 0),
-        ((), 20, 0),
+        ((context(1, 1, "x" * 30), context(2, 2, "short")), False, 20, 20),
+        ((added(1, "y" * 12), removed(1, "z" * 9)), True, 21, 8),
+        ((context(1, 1, "fits"),), False, 20, 0),
+        ((), True, 20, 0),
     ],
     ids=["unified", "split", "fits", "empty"],
 )
 def test_overflow_is_how_far_the_widest_text_runs_past_what_shows(
-    rows: tuple[Line | SplitRow, ...], width: int, expected: int
+    lines: tuple[Line, ...], is_split: bool, width: int, expected: int
 ) -> None:
-    assert overflow(rows, 3, width) == expected
+    assert overflow(Extent.of(lines), is_split, width) == expected
+
+
+def test_extent_measures_each_sides_widest_text_as_drawn() -> None:
+    lines = (context(1, 1, "\tab\r"), removed(2, "z" * 9), added(1234, "日本"))
+
+    assert Extent.of(lines) == Extent(digits=4, old=9, new=6)
+
+
+def drawn_overflow(rows: tuple[Line | SplitRow, ...], digits: int, width: int) -> int:
+    """`overflow` worked out row by row, measuring each line of each row as it's drawn."""
+    left_width, right_width = split_widths(width)
+    distances = [0]
+    for row in rows:
+        if isinstance(row, Line):
+            distances.append(cell_width(displayed(row.text)) - unified_room(digits, width))
+            continue
+        for line, side_width in ((row.left, left_width), (row.right, right_width)):
+            if line is not None:
+                distances.append(cell_width(displayed(line.text)) - half_room(digits, side_width))
+    return max(distances)
+
+
+LINES = st.lists(
+    st.tuples(
+        st.sampled_from(LineKind),
+        st.lists(st.sampled_from(["a", "日", "\t", "e\u0301"]), max_size=40).map("".join),
+    ),
+    max_size=8,
+).map(lambda drawn: tuple(Line(kind, 1, 1, text, 0) for kind, text in drawn))
+
+
+@given(LINES, st.booleans(), st.integers(0, 60))
+def test_overflow_is_what_measuring_every_row_drawn_finds(lines: tuple[Line, ...], is_split: bool, width: int) -> None:
+    rows: tuple[Line | SplitRow, ...] = split_rows(lines) if is_split else lines
+    extent = Extent.of(lines)
+
+    assert overflow(extent, is_split, width) == drawn_overflow(rows, extent.digits, width)
 
 
 PIECES = st.lists(

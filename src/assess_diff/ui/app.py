@@ -79,7 +79,9 @@ from assess_diff.review import edit_comment
 from assess_diff.review import edit_summary
 from assess_diff.review import is_outdated
 from assess_diff.review import rename
+from assess_diff.storage import Listing
 from assess_diff.storage import OpenReview
+from assess_diff.storage import Unreadable
 from assess_diff.storage import for_project
 from assess_diff.ui.comment_jump import comment_jump
 from assess_diff.ui.comment_jump import wanted
@@ -88,6 +90,7 @@ from assess_diff.ui.diff_view import diff_pane
 from assess_diff.ui.diff_view import summary_dialog
 from assess_diff.ui.diff_view import use_stable_actions
 from assess_diff.ui.file_picker import file_picker
+from assess_diff.ui.file_picker import marked
 from assess_diff.ui.pills import ON_SCREEN
 from assess_diff.ui.pills import key_pills
 from assess_diff.ui.pills import pills
@@ -142,10 +145,13 @@ class PickingTheme:
 
 @dataclass(frozen=True, slots=True)
 class Managing:
-    """The review manager is open: its focus handle, and the reviews it lists, read when it opened or last changed."""
+    """
+    The review manager is open: its focus handle, and the project's reviews and the store's unreadable files
+    it lists, read when it opened or last changed.
+    """
 
     handle: FocusHandle
-    reviews: tuple[Review, ...]
+    listing: Listing
 
 
 INITIAL_SESSION = Session(
@@ -180,6 +186,13 @@ def copied(review: Review, document: Document | None) -> tuple[str, CopyToClipbo
 
 def plural(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+def unreadable_notice(unreadable: tuple[Unreadable, ...]) -> str | None:
+    """What the app says as it starts about review files it can't read, which the review manager lists."""
+    if not unreadable:
+        return None
+    return f"{plural(len(unreadable), 'review file')} can't be read; o lists {'it' if len(unreadable) == 1 else 'them'}"
 
 
 NAME_STYLE = text_bold | text_color("amber", 300)
@@ -297,6 +310,7 @@ def assess_app(
     preferences_file: PreferencesFile,
     initial_preferences: Preferences,
     initial_diff: Diff | None,
+    unreadable: tuple[Unreadable, ...],
 ) -> Div:
     """
     The whole app. `target` is the branch the merge base is taken with,
@@ -304,6 +318,7 @@ def assess_app(
     `initial_diff` is drawn until the app computes the diff itself, as it starts watching;
     the CLI computes it before the app starts, so the first frame draws it,
     and it's `None` only when that failed, which draws a line saying it's being read.
+    `unreadable` are the store's files the CLI couldn't read as it started, which the first notice mentions.
     """
     review, set_review = use_state(open_review.review)
     preferences, set_preferences = use_state(initial_preferences)
@@ -314,7 +329,7 @@ def assess_app(
     # Apart from the session, so they stay as they are when another review opens.
     are_files_shown, set_files_shown = use_state(True)
     are_keys_shown, set_keys_shown = use_state(True)
-    notice, set_notice = use_state(no_notice)
+    notice, set_notice = use_state(unreadable_notice(unreadable))
     # Apart from `notice`, so the refresh that recovers from a git failure can clear it without clearing any other.
     git_error, set_git_error = use_state(no_notice)
     diff_focus, _ = use_state(FocusHandle)
@@ -507,7 +522,7 @@ def assess_app(
                 return None
 
     def jump(target: HeaderAt | SummaryAt) -> InputResponse:
-        set_session(lambda s: replace(s, cursor=target, selection=None))
+        set_session(lambda s: replace(s, cursor=target, selection=None, confirming_delete=None))
         return FocusOn(diff_focus), ScrollIntoView(cursor_element, block="start")
 
     def save_preferences(new: Preferences) -> None:
@@ -532,8 +547,10 @@ def assess_app(
             )
         )
 
-    def project_reviews() -> tuple[Review, ...]:
-        return for_project(open_review.store.reviews(), repository.common_dir, repository.worktree)
+    def project_listing() -> Listing:
+        """The store as the review manager lists it: this project's reviews, and every file that can't be read."""
+        listing = open_review.store.listed()
+        return replace(listing, reviews=for_project(listing.reviews, repository.common_dir, repository.worktree))
 
     def show_review(review: Review, digest: str | None) -> InputResponse:
         open_review.switch(review, digest)
@@ -563,8 +580,8 @@ def assess_app(
         else:
             stored = open_review.store.load(review_id)
             open_review.store.save(rename(stored.review, name), stored.digest)
-        listed = project_reviews()
-        set_session(lambda s: s if s.managing is None else replace(s, managing=replace(s.managing, reviews=listed)))
+        listed = project_listing()
+        set_session(lambda s: s if s.managing is None else replace(s, managing=replace(s.managing, listing=listed)))
 
     def delete_review(review_id: str) -> None:
         open_review.store.delete(review_id)
@@ -573,8 +590,8 @@ def assess_app(
             managing = session.managing
             start_new_review()
             set_session(lambda s: replace(s, managing=managing))
-        listed = project_reviews()
-        set_session(lambda s: s if s.managing is None else replace(s, managing=replace(s.managing, reviews=listed)))
+        listed = project_listing()
+        set_session(lambda s: s if s.managing is None else replace(s, managing=replace(s.managing, listing=listed)))
 
     def close_manager() -> InputResponse:
         set_session(lambda s: replace(s, managing=None))
@@ -641,7 +658,7 @@ def assess_app(
                 return Quit()
             case KeyPressed(key="o"):
                 handle = session.managing.handle if session.managing is not None else FocusHandle()
-                listed = project_reviews()
+                listed = project_listing()
                 set_session(lambda s: replace(s, managing=Managing(handle, listed)))
                 return FocusOn(handle)
             case KeyPressed(key="s"):
@@ -715,7 +732,7 @@ def assess_app(
                 style=row | fill(1),
                 children=(
                     *(
-                        (file_picker(picker_files, comment_counts, cursor, picker_focus, jump),)
+                        (file_picker(picker_files, comment_counts, marked(cursor, review), picker_focus, jump),)
                         if are_files_shown
                         else ()
                     ),
@@ -784,7 +801,8 @@ def assess_app(
             *(
                 (
                     review_manager(
-                        session.managing.reviews,
+                        session.managing.listing.reviews,
+                        session.managing.listing.unreadable,
                         review.id,
                         str(repository.worktree),
                         session.managing.handle,

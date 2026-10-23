@@ -42,9 +42,12 @@ from counterweight.styles.utilities import *
 
 from assess_diff.diff import FileDiff
 from assess_diff.diff import FileStatus
+from assess_diff.navigation import CommentAt
 from assess_diff.navigation import HeaderAt
 from assess_diff.navigation import Position
+from assess_diff.navigation import RowAt
 from assess_diff.navigation import SummaryAt
+from assess_diff.review import Review
 from assess_diff.ui.theme_picker import Query
 from assess_diff.ui.theme_picker import matches
 
@@ -151,6 +154,23 @@ def directory_entry(directory: DirectoryRow) -> tuple[Chunk, ...]:
     )
 
 
+def marked(cursor: Position, review: Review) -> HeaderAt | SummaryAt | None:
+    """
+    The picker's entry for where the diff's cursor is: the summary's, or the file's it's on the header,
+    a row or a comment of; `None` for a comment on a file no longer in the diff, which has no entry.
+    """
+    match cursor:
+        case SummaryAt():
+            return cursor
+        case HeaderAt(path=path) | RowAt(path=path):
+            return HeaderAt(path)
+        case CommentAt(number=number):
+            comment = review.comment(number)
+            return None if comment is None else HeaderAt(comment.anchor.path)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 @dataclass(frozen=True, slots=True)
 class Filtering:
     """The picker is narrowed to the files matching what's typed: its field's focus handle, and the query."""
@@ -163,13 +183,13 @@ class Filtering:
 def file_picker(
     files: tuple[FileDiff, ...],
     comment_counts: tuple[int, ...],
-    current: Position,
+    current: HeaderAt | SummaryAt | None,
     handle: FocusHandle,
     jump: Callable[[HeaderAt | SummaryAt], InputResponse],
 ) -> Div:
     """
     The changed files as a tree, each with its status and how many comments it has, as wide as the widest of them,
-    under the summary's entry. `current` is the diff's cursor, whose file or summary is marked.
+    under the summary's entry. `current` is the entry marked as where the diff's cursor is, as `marked` finds it.
     Enter or a press on a directory folds it or unfolds it, as Left and Right do.
     """
     focus = use_focus(handle=handle, in_focus_order=False)
@@ -236,7 +256,7 @@ def file_picker(
                     Chunk(content=" " * row.depth),
                     *file_entry(files[file_index], row.label, comment_counts[file_index]),
                 )
-                is_current = files[file_index].path == getattr(current, "path", None)
+                is_current = current == HeaderAt(files[file_index].path)
             case DirectoryRow():
                 content = (Chunk(content=" " * row.depth), *directory_entry(row))
                 is_current = False

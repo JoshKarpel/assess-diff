@@ -110,6 +110,7 @@ class FileLayout:
 class Document:
     diff: Diff
     """The diff this lays out, so whoever has a document has the diff too."""
+    mode: ViewMode
     files: tuple[FileLayout, ...]
     orphans: tuple[int, ...]
     """Comments on files no longer in the diff, drawn after every file."""
@@ -209,7 +210,7 @@ def build_document(diff: Diff, comments: tuple[Comment, ...], mode: ViewMode) ->
         if is_stop:
             stops.append(len(positions))
         positions.append(position)
-    return Document(diff=diff, files=files, orphans=orphans, positions=tuple(positions), stops=tuple(stops))
+    return Document(diff=diff, mode=mode, files=files, orphans=orphans, positions=tuple(positions), stops=tuple(stops))
 
 
 def document_positions(files: tuple[FileLayout, ...], orphans: tuple[int, ...]) -> Iterator[tuple[Position, bool]]:

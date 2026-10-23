@@ -100,6 +100,16 @@ def test_excerpt_fence_is_longer_than_any_backtick_run_inside() -> None:
     assert excerpt_block(excerpt) == '````diff\n+doc = """```python"""\n````'
 
 
+def test_excerpt_block_puts_each_line_on_its_own_line_after_its_marker() -> None:
+    excerpt = (
+        ExcerptLine(kind=LineKind.REMOVED, text="    return None"),
+        ExcerptLine(kind=LineKind.ADDED, text="    return compute()"),
+        ExcerptLine(kind=LineKind.CONTEXT, text=""),
+    )
+
+    assert excerpt_block(excerpt) == "```diff\n-    return None\n+    return compute()\n \n```"
+
+
 def test_markdown_names_a_whole_file_by_its_path() -> None:
     markdown = to_markdown(review(file_comment(4, "src/app.py", body="Split this up.")), diff_of(FILE))
 
