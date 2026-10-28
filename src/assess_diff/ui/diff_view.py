@@ -64,9 +64,7 @@ from assess_diff.ui.rows import overflow
 from assess_diff.ui.rows import row_chunks
 from assess_diff.ui.syntax import syntax_lines
 
-COMMENT_STYLES = TextFieldStyles(
-    box=border | border_lightrounded | border_color("amber", 400) | pad_x(1), focused_box=border_color("amber", 300)
-)
+COMMENT_STYLES = TextFieldStyles(box=pad_x(1), focused_box=default)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,19 +207,30 @@ def editor(
     style: Style,
 ) -> Div:
     return Div(
-        style=col | style,
+        style=col | border | border_lightrounded | border_color("amber", 300) | style,
         on_input=finish_on_escape(actions),
         children=(
-            Text(content=title, style=text_wrap_none),
+            border_title(title),
             text_area(value, edit, handle=handle, enter_inserts_newline=True, styles=COMMENT_STYLES),
         ),
     )
 
 
+def border_title(content: tuple[Chunk, ...]) -> Text:
+    """
+    `content` drawn over the left of the top border of the box it's a child of,
+    with its first character over the box's first column of text when `content` starts with a space.
+    """
+    return Text(
+        content=content,
+        style=position_absolute | inset_left(0) | inset_top(-1) | clip_to_border | text_wrap_none,
+    )
+
+
 def comment_title(comment: Comment, is_outdated: bool) -> tuple[Chunk, ...]:
     return (
-        Chunk(content=f"#{comment.number}", style=text_bold | text_color("amber", 300)),
-        *((Chunk(content="  outdated", style=text_color("slate", 400)),) if is_outdated else ()),
+        Chunk(content=f" #{comment.number} ", style=text_bold | text_color("amber", 300)),
+        *((Chunk(content="outdated ", style=text_color("slate", 400)),) if is_outdated else ()),
     )
 
 
@@ -245,17 +254,25 @@ def comment_box(
             actions,
             margin,
         )
-    body = comment.body or "(empty: Enter to write it)"
-    return Text(
-        content=(*title, Chunk.newline(), Chunk(content=body, style=default if comment.body else text_dim)),
+    # The box's colors fill around the text, and the text paints its own cells.
+    background = padding_color("slate", 800) | content_color("slate", 800)
+    return Div(
         style=margin
         | border
         | border_lightrounded
         | pad_x(1)
-        | text_wrap_stable
-        | (border_color("amber", 300) | text_bg("slate", 800) if is_cursor else border_color("amber", 700)),
+        | (border_color("amber", 300) | background if is_cursor else border_color("amber", 700)),
         handle=cursor_element if is_cursor else None,
         on_input=press(CommentAt(comment.number), actions),
+        children=(
+            border_title(title),
+            Text(
+                content=comment.body or "(empty: Enter to write it)",
+                style=text_wrap_stable
+                | (default if comment.body else text_dim)
+                | (text_bg("slate", 800) if is_cursor else default),
+            ),
+        ),
     )
 
 
@@ -417,10 +434,7 @@ def rows_run(lines: tuple[Chunk, ...], path: str, start: int, handle: ElementHan
     return Text(content=lines, style=text_wrap_none, handle=handle, on_input=press_rows(path, start, actions))
 
 
-SUMMARY_TITLE = Text(
-    content=(Chunk(content=" Review summary ", style=text_bold | text_color("amber", 300)),),
-    style=position_absolute | inset_left(1) | inset_top(-1) | clip_to_border | text_wrap_none,
-)
+SUMMARY_TITLE = border_title((Chunk(content=" Review summary ", style=text_bold | text_color("amber", 300)),))
 SUMMARY_STYLES = TextFieldStyles(box=pad_x(1), focused_box=default)
 # Docked at the bottom rather than centered, since moves center the cursor's line, which should stay in view.
 docked = position_absolute | inset_x(2) | inset_bottom(2) | fit_content_height | z(1)
