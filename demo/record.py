@@ -208,6 +208,10 @@ WALKTHROUGH: list[AutopilotStep] = [
 
 
 async def record(cast: Path) -> None:
+    # A git hook runs with `GIT_DIR`, `GIT_INDEX_FILE` and the commit's author set for the repository being committed to,
+    # which would point every git here at that repository instead of the scratch one, and change the hashes.
+    for name in [name for name in os.environ if name.startswith("GIT_")]:
+        del os.environ[name]
     os.environ.update(GIT_ENVIRONMENT)
     with tempfile.TemporaryDirectory() as directory:
         scratch = build_repository(Path(directory) / "weather")
@@ -248,6 +252,8 @@ def main() -> None:
     parser.add_argument("--redraw", action="store_true", help="Draw the GIF even if the asciicast hasn't changed.")
     arguments = parser.parse_args()
     new_paths = [str(path) for path in (CAST, GIF) if not path.exists()]
+    # Recording clears git's variables, which a hook's `git add` needs to stage into the index being committed.
+    hook_environment = dict(os.environ)
     with tempfile.TemporaryDirectory() as directory:
         recorded = Path(directory) / "demo.cast"
         asyncio.run(record(recorded))
@@ -259,7 +265,7 @@ def main() -> None:
         draw(cast, Path(directory))
     # pre-commit only fails a hook that leaves an unstaged diff, which a new untracked file isn't.
     if new_paths:
-        subprocess.run(["git", "add", "--intent-to-add", *new_paths], check=True)
+        subprocess.run(["git", "add", "--intent-to-add", *new_paths], check=True, env=hook_environment)
 
 
 if __name__ == "__main__":

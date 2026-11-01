@@ -8,7 +8,6 @@ from counterweight.asciicast import Recording
 from counterweight.controls import FocusOn
 from counterweight.controls import Marker
 from counterweight.elements import Chunk
-from counterweight.elements import Text
 from counterweight.events import InputEvent
 from counterweight.events import KeyPressed
 from counterweight.events import MouseScrolledDown
@@ -22,11 +21,13 @@ from counterweight.geometry import Position
 from counterweight.geometry import Rects
 from counterweight.geometry import Region
 from counterweight.keys import Key
+from counterweight.styles.utilities import border
+from counterweight.styles.utilities import border_color
+from counterweight.styles.utilities import border_lightrounded
 from counterweight.styles.utilities import col
 from counterweight.styles.utilities import margin_left
 from counterweight.styles.utilities import text_bold
 from counterweight.styles.utilities import text_color
-from counterweight.styles.utilities import text_wrap_none
 from counterweight.widgets import text_area
 
 from assess_diff.diff import FileDiff
@@ -45,6 +46,7 @@ from assess_diff.ui.diff_view import COMMENT_STYLES
 from assess_diff.ui.diff_view import ROWS_PER_BLOCK
 from assess_diff.ui.diff_view import Actions
 from assess_diff.ui.diff_view import Run
+from assess_diff.ui.diff_view import border_title
 from assess_diff.ui.diff_view import comment_title
 from assess_diff.ui.diff_view import editor
 from assess_diff.ui.diff_view import header_chunks
@@ -137,16 +139,16 @@ def edit_nothing(edit: object) -> None:
     """An editor's `edit`, which these tests compare by identity rather than call."""
 
 
-def test_editor_is_its_title_over_a_multiline_text_area_in_the_comment_styles() -> None:
+def test_editor_is_a_multiline_text_area_in_the_comment_styles_with_its_title_on_the_border() -> None:
     title = (Chunk(content="#6"),)
     handle = FocusHandle()
 
     drawn = editor(title, "a body", edit_nothing, handle, ACTIONS, margin_left(3))
 
     assert (drawn.style, drawn.children) == (
-        col | margin_left(3),
+        col | border | border_lightrounded | border_color("amber", 300) | margin_left(3),
         (
-            Text(content=title, style=text_wrap_none),
+            border_title(title),
             text_area("a body", edit_nothing, handle=handle, enter_inserts_newline=True, styles=COMMENT_STYLES),
         ),
     )
@@ -163,12 +165,12 @@ def test_editor_finishes_editing_on_escape_only(key: str, response: FocusOn | No
 @pytest.mark.parametrize(
     ("is_outdated", "expected"),
     [
-        (False, (Chunk(content="#14", style=text_bold | text_color("amber", 300)),)),
+        (False, (Chunk(content=" #14 ", style=text_bold | text_color("amber", 300)),)),
         (
             True,
             (
-                Chunk(content="#14", style=text_bold | text_color("amber", 300)),
-                Chunk(content="  outdated", style=SLATE),
+                Chunk(content=" #14 ", style=text_bold | text_color("amber", 300)),
+                Chunk(content="outdated ", style=SLATE),
             ),
         ),
     ],

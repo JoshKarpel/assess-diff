@@ -679,7 +679,7 @@ async def test_outdated_comments_say_so(harness: Harness) -> None:
 
     await harness.run([TAB, TAB, harness.shot()], open_review=with_stale)
 
-    assert "#1  outdated" in harness.frames[0]
+    assert "╭ #1 outdated ─" in harness.frames[0]
 
 
 async def test_a_review_changed_by_another_process_is_saved_as_a_new_one(harness: Harness) -> None:
@@ -985,11 +985,11 @@ async def test_a_files_first_comment_leaves_the_diff_as_wide_as_it_was(harness: 
 async def test_the_summary_title_is_on_its_boxs_border(harness: Harness) -> None:
     await harness.run([harness.shot()])
 
-    assert "╭─ Review summary ─" in harness.frames[0]
+    assert "╭ Review summary ─" in harness.frames[0]
 
 
 async def test_the_summary_dialog_title_is_on_its_border(harness: Harness) -> None:
     await harness.run([*keys("r"), harness.shot()])
 
     (dialog_top,) = [line for line in harness.frames[0].splitlines() if "Review summary" in line and "│" not in line]
-    assert "╭─ Review summary ─" in dialog_top
+    assert "╭ Review summary ─" in dialog_top
