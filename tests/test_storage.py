@@ -190,6 +190,20 @@ def test_update_saves_the_edit_and_stamps_the_time(store: ReviewStore) -> None:
     )
 
 
+def test_update_that_changes_nothing_saves_nothing(store: ReviewStore) -> None:
+    open_review = opened(store)
+    open_review.update(lambda r: edit_summary(r, lambda _: "saved"))
+    store.path(open_review.review.id).write_text(review(summary="theirs").model_dump_json())
+
+    notice = open_review.update(lambda r: edit_summary(r, lambda body: body))
+
+    assert (notice, store.load(open_review.review.id).review.summary, open_review.review.id) == (
+        None,
+        "theirs",
+        "0199aaaa-review",
+    )
+
+
 def test_consecutive_updates_each_save_over_the_last(store: ReviewStore) -> None:
     open_review = opened(store)
 

@@ -27,6 +27,7 @@ from counterweight.focus import FocusHandle
 from counterweight.handlers import on_click
 from counterweight.handlers import scroll_on_wheel
 from counterweight.headless import use_text_input
+from counterweight.hooks import Editor
 from counterweight.hooks import use_focus
 from counterweight.hooks import use_state
 from counterweight.keys import Key
@@ -93,7 +94,7 @@ def unreadable_chunks(file: Unreadable) -> tuple[Chunk, ...]:
 
 
 @component
-def name_field(renaming: Renaming, set_name: Callable[[Callable[[str], str]], None]) -> Text:
+def name_field(renaming: Renaming, set_name: Editor[str]) -> Text:
     field = use_text_input(renaming.name, set_name, handle=renaming.handle)
     cursor = (text_color("slate", 900) | text_bg("slate", 100)).text_style
     return Text(
@@ -129,10 +130,12 @@ def review_manager(
     chosen = reviews[highlighted - 1] if highlighted > 0 else None
     in_view = ScrollIntoView(highlighted_entry, block="nearest")
 
-    def set_name(edit: Callable[[str], str]) -> None:
-        set_choice(
+    def set_name(edit: Callable[[str], str]) -> str:
+        settled = set_choice(
             lambda c: c if c.renaming is None else replace(c, renaming=replace(c.renaming, name=edit(c.renaming.name)))
         )
+        # A closed field has nothing typed in it.
+        return "" if settled.renaming is None else settled.renaming.name
 
     def on_input(event: InputEvent, receiver: Receiver) -> InputResponse:
         renaming = choice.renaming
