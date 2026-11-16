@@ -16,7 +16,6 @@ from assess_diff.review import FOLLOW_MERGE_BASE
 from assess_diff.review import pinned
 from assess_diff.ui.base_picker import BaseOption
 from assess_diff.ui.base_picker import base_options
-from assess_diff.ui.base_picker import current_index
 from assess_diff.ui.base_picker import gutter
 from assess_diff.ui.base_picker import option_chunks
 
@@ -44,17 +43,6 @@ def test_options_without_a_merge_base_pin_all_but_head() -> None:
     options = base_options(History(commits=(HEAD, MIDDLE), merge_base=None), None)
 
     assert [option.choice for option in options] == [FOLLOW_HEAD, pinned(MIDDLE.commit)]
-
-
-@pytest.mark.parametrize(
-    ("current", "index"),
-    [(HEAD.commit, 0), (FORK.commit, 2), ("f" * 40, None), (None, None)],
-    ids=["head", "fork", "unlisted", "unknown"],
-)
-def test_current_index_is_the_row_of_the_diffs_base(current: str | None, index: int | None) -> None:
-    options = base_options(History(commits=(HEAD, MIDDLE, FORK), merge_base=FORK.commit), "trunk")
-
-    assert current_index(options, current) == index
 
 
 @pytest.mark.parametrize(("index", "line"), [(0, "│ "), (1, "│ "), (2, "● "), (3, "  ")])

@@ -27,6 +27,8 @@ from counterweight.focus import ElementHandle
 from counterweight.focus import FocusHandle
 from counterweight.handlers import on_click
 from counterweight.handlers import scroll_on_wheel
+from counterweight.headless import Highlight
+from counterweight.hooks import get_state
 from counterweight.hooks import use_effect
 from counterweight.hooks import use_focus
 from counterweight.hooks import use_state
@@ -73,9 +75,9 @@ def base_options(history: History, target: str | None) -> tuple[BaseOption, ...]
     return tuple(option(index, commit) for index, commit in enumerate(history.commits))
 
 
-def current_index(options: tuple[BaseOption, ...], current: str | None) -> int | None:
-    """The row of `current`, the commit the diff is against now, or `None` when it isn't listed or isn't known yet."""
-    return next((index for index, option in enumerate(options) if option.commit.commit == current), None)
+def commit_of(option: BaseOption) -> str:
+    """The key the highlight holds an option by: its commit's hash, which no other option shares."""
+    return option.commit.commit
 
 
 def gutter(index: int, highlighted: int) -> str:
@@ -117,9 +119,9 @@ def base_picker(
     # The rows once the history is read, or why it couldn't be.
     not_loaded: tuple[BaseOption, ...] | str | None = None
     loaded, set_loaded = use_state(not_loaded)
-    # The row the reader moved to, until which it's the current base's.
-    not_moved: int | None = None
-    moved_to, set_moved_to = use_state(not_moved)
+    # The highlight the reader moved, until which it's on the current base, wherever that is as `current` changes.
+    not_moved: Highlight | None = None
+    moved, set_moved = use_state(not_moved)
     highlighted_row, _ = use_state(ElementHandle)
 
     async def load() -> None:
@@ -131,33 +133,41 @@ def base_picker(
     use_effect(load, deps=())
 
     options = loaded if isinstance(loaded, tuple) else ()
-    now = current_index(options, current)
-    highlighted = moved_to if moved_to is not None else (now if now is not None else 0)
     in_view = ScrollIntoView(highlighted_row, block="nearest")
+
+    def or_current(highlight: Highlight | None) -> Highlight:
+        return Highlight(key=current) if highlight is None else highlight
+
+    def move(by: int) -> InputResponse:
+        set_moved(lambda highlight: or_current(highlight).moved(options, by, commit_of, ends="stop"))
+        return in_view
 
     def on_input(event: InputEvent, receiver: Receiver) -> InputResponse:
         match event:
             case KeyPressed(key=Key.Down | "j") if options:
-                set_moved_to(min(highlighted + 1, len(options) - 1))
-                return in_view
+                return move(1)
             case KeyPressed(key=Key.Up | "k") if options:
-                set_moved_to(max(highlighted - 1, 0))
-                return in_view
-            case KeyPressed(key=Key.Enter) if options:
-                return choose(options[highlighted].choice)
+                return move(-1)
+            # Several keys can arrive before the next render, so Enter chooses where the latest move left the highlight.
+            case KeyPressed(key=Key.Enter) if (
+                index := or_current(get_state(set_moved)).index_in(options, commit_of)
+            ) is not None:
+                return choose(options[index].choice)
             case KeyPressed(key=Key.Escape):
                 return cancel()
             case _:
                 return None
 
+    # `None` only before the history is read, since it always holds `HEAD`.
+    highlighted = or_current(moved).index_in(options, commit_of)
     if isinstance(loaded, str):
         listed: tuple[Text, ...] = (Text(content=loaded, style=pad_x(1) | text_color("amber", 300)),)
-    elif loaded is None:
+    elif highlighted is None:
         listed = (Text(content="Reading the history…", style=pad_x(1) | text_color("slate", 500)),)
     else:
         listed = tuple(
             Text(
-                content=option_chunks(option, index, highlighted, index == now),
+                content=option_chunks(option, index, highlighted, option.commit.commit == current),
                 style=pad_x(1)
                 | text_wrap_none
                 | text_overflow_ellipsis
