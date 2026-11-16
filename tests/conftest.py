@@ -70,6 +70,11 @@ class Scratch:
         self.git("commit", "--quiet", "--allow-empty", "-m", message)
         return self.git("rev-parse", "HEAD").strip()
 
+    def empty_commit(self, message: str) -> str:
+        """A commit of nothing, which moves `HEAD` and leaves the working tree's changes uncommitted."""
+        self.git("commit", "--quiet", "--allow-empty", "-m", message)
+        return self.git("rev-parse", "HEAD").strip()
+
 
 def init_scratch(root: Path) -> Scratch:
     root.mkdir(parents=True, exist_ok=True)

@@ -29,7 +29,6 @@ from without_cli import option
 from without_cli import optional
 from without_cli import run
 
-from assess_diff.diff import BaseMode
 from assess_diff.diff import Diff
 from assess_diff.export import to_markdown
 from assess_diff.git import GitError
@@ -40,6 +39,9 @@ from assess_diff.git import find_repository
 from assess_diff.git import resolve_base
 from assess_diff.preferences import PreferencesFile
 from assess_diff.preferences import preferences_path
+from assess_diff.review import FOLLOW_HEAD
+from assess_diff.review import FOLLOW_MERGE_BASE
+from assess_diff.review import BaseChoice
 from assess_diff.review import Review
 from assess_diff.review import UnreadableReview
 from assess_diff.storage import Listing
@@ -113,14 +115,13 @@ def report_unreadable(streams: Streams, unreadable: tuple[Unreadable, ...]) -> N
 
 
 async def current_diff(repository: Repository, review: Review, target: str | None) -> Diff:
-    """The diff `review` reads against: the merge base with `target` if it was last viewed that way, else `HEAD`."""
-    mode = review.base_mode if target is not None else BaseMode.HEAD
-    return await compute_diff(repository, await resolve_base(repository, mode, target or "HEAD"))
+    """The diff `review` reads against: the base it was last viewed against, with the merge base taken with `target`."""
+    return await compute_diff(repository, await resolve_base(repository, review.base, target))
 
 
-def starting_base(base: str | None) -> BaseMode:
+def starting_base(base: str | None) -> BaseChoice:
     """What a new review is against: the change since the last commit, unless `--base` named a branch to take the merge base with."""
-    return BaseMode.MERGE_BASE if base is not None else BaseMode.HEAD
+    return FOLLOW_MERGE_BASE if base is not None else FOLLOW_HEAD
 
 
 def opened(
@@ -148,8 +149,8 @@ async def review_command(workspace: Workspace, new: bool, review_id: str | None,
     listing = workspace.store.listed()
     stored = opened(workspace.store, listing, repository, new, review_id)
     if stored is None:
-        mode = starting_base(base)
-        review = Review.start(new_id(), repository.common_dir, repository.worktree, repository.branch, mode, now())
+        starting = starting_base(base)
+        review = Review.start(new_id(), repository.common_dir, repository.worktree, repository.branch, starting, now())
         open_review = OpenReview(workspace.store, review, None, new_id, now)
     else:
         open_review = OpenReview(workspace.store, stored.review, stored.digest, new_id, now)

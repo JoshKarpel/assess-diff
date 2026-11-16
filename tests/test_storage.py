@@ -224,7 +224,7 @@ def test_listed_puts_files_that_cant_be_read_beside_the_reviews(store: ReviewSto
     assert [r.id for r in listing.reviews] == ["fine"]
     assert listing.unreadable == (
         Unreadable(
-            store.directory / "future.json", "This review is version 99, and this assess-diff reads up to version 1"
+            store.directory / "future.json", "This review is version 99, and this assess-diff reads up to version 2"
         ),
         Unreadable(store.directory / "garbled.json", "Expecting value: line 1 column 1 (char 0)"),
     )

@@ -11,9 +11,9 @@ from counterweight.styles.utilities import text_bold
 from counterweight.styles.utilities import text_color
 from counterweight.styles.utilities import text_dim
 
-from assess_diff.diff import BaseMode
 from assess_diff.diff import LineKind
 from assess_diff.preferences import PreferencesFile
+from assess_diff.review import FOLLOW_HEAD
 from assess_diff.review import Review
 from assess_diff.storage import ReviewStore
 from assess_diff.storage import Unreadable
@@ -50,7 +50,7 @@ def harness(scratch: Scratch, tmp_path: Path) -> Harness:
 def seed(harness: Harness, review_id: str, name: str, *, minutes: int, body: str = "") -> Review:
     """A saved review of the harness's worktree, updated `minutes` after the clock, with one comment if `body`."""
     root = harness.scratch.root
-    review = Review.start(review_id, root / ".git", root, "main", BaseMode.HEAD, CLOCK).model_copy(
+    review = Review.start(review_id, root / ".git", root, "main", FOLLOW_HEAD, CLOCK).model_copy(
         update={"name": name, "updated": CLOCK.replace(minute=minutes)}
     )
     if body:

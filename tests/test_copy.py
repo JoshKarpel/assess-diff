@@ -11,13 +11,13 @@ from counterweight.autopilot import WaitFor
 from counterweight.controls import Quit
 from counterweight.events import KeyPressed
 
-from assess_diff.diff import BaseMode
 from assess_diff.export import to_markdown
 from assess_diff.git import compute_diff
 from assess_diff.git import find_repository
 from assess_diff.git import resolve_base
 from assess_diff.preferences import Preferences
 from assess_diff.preferences import PreferencesFile
+from assess_diff.review import FOLLOW_HEAD
 from assess_diff.review import Review
 from assess_diff.review import edit_summary
 from assess_diff.storage import OpenReview
@@ -35,7 +35,7 @@ async def test_c_copies_the_review_as_markdown(scratch: Scratch, terminal: Termi
     scratch.commit()
     scratch.write("app.py", "one = 2\n")
     repository = await find_repository(scratch.root)
-    review = Review.start("copied", repository.common_dir, repository.worktree, "main", BaseMode.HEAD, CLOCK)
+    review = Review.start("copied", repository.common_dir, repository.worktree, "main", FOLLOW_HEAD, CLOCK)
     open_review = OpenReview(ReviewStore(tmp_path / "reviews"), review, None, lambda: "new", lambda: CLOCK)
     open_review.update(lambda r: edit_summary(r, lambda _: "Copy me."))
     output = io.StringIO()
@@ -62,5 +62,5 @@ async def test_c_copies_the_review_as_markdown(scratch: Scratch, terminal: Termi
         ],
     )
 
-    diff = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))
+    diff = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))
     assert copies == [to_markdown(open_review.review, diff)]

@@ -17,9 +17,11 @@ from assess_diff.cli import now
 from assess_diff.cli import starting_base
 from assess_diff.cli import target_branch
 from assess_diff.cli import with_default_command
-from assess_diff.diff import BaseMode
 from assess_diff.diff import LineKind
 from assess_diff.git import find_repository
+from assess_diff.review import FOLLOW_HEAD
+from assess_diff.review import FOLLOW_MERGE_BASE
+from assess_diff.review import BaseChoice
 from assess_diff.review import Review
 from assess_diff.storage import ReviewStore
 from tests.builders import STARTED
@@ -80,7 +82,7 @@ def project(scratch: Scratch, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 
 def seed(store: ReviewStore, scratch: Scratch, review_id: str, name: str, body: str = "") -> Review:
-    review = Review.start(review_id, scratch.root / ".git", scratch.root, "main", BaseMode.HEAD, STARTED)
+    review = Review.start(review_id, scratch.root / ".git", scratch.root, "main", FOLLOW_HEAD, STARTED)
     review = review.model_copy(update={"name": name})
     if body:
         review = review.model_copy(
@@ -110,8 +112,8 @@ async def test_latest_is_this_worktrees_review_even_with_newer_ones_elsewhere(
     newer = STARTED + timedelta(hours=1)
     other_worktree = scratch.root.parent / "other-worktree"
     other_project = scratch.root.parent / "other-project" / ".git"
-    project.save(Review.start("0199bbbb-there", scratch.root / ".git", other_worktree, "x", BaseMode.HEAD, newer), None)
-    project.save(Review.start("0199cccc-theirs", other_project, scratch.root, "y", BaseMode.HEAD, newer), None)
+    project.save(Review.start("0199bbbb-there", scratch.root / ".git", other_worktree, "x", FOLLOW_HEAD, newer), None)
+    project.save(Review.start("0199cccc-theirs", other_project, scratch.root, "y", FOLLOW_HEAD, newer), None)
 
     found = latest(project.listed().reviews, await find_repository(scratch.root))
 
@@ -144,9 +146,7 @@ def merge_base_review(project: ReviewStore, scratch: Scratch) -> str:
     base = scratch.git("rev-parse", "--short=7", "HEAD").strip()
     scratch.git("checkout", "--quiet", "-b", "feature")
     scratch.commit("ahead")
-    review = Review.start(
-        "0199cccc-merged", scratch.root / ".git", scratch.root, "feature", BaseMode.MERGE_BASE, STARTED
-    )
+    review = Review.start("0199cccc-merged", scratch.root / ".git", scratch.root, "feature", FOLLOW_MERGE_BASE, STARTED)
     project.save(review, None)
     return base
 
@@ -285,7 +285,7 @@ def unreadable(store: ReviewStore) -> str:
     (store.directory / "0199ffff-future.json").write_text('{"version": 99}')
     return (
         f"assess-diff: Can't read the review in {store.directory / '0199ffff-future.json'}: "
-        "This review is version 99, and this assess-diff reads up to version 1\n"
+        "This review is version 99, and this assess-diff reads up to version 2\n"
     )
 
 
@@ -344,7 +344,7 @@ def test_review_opens_beside_an_unreadable_review(
 
 
 @pytest.mark.parametrize(
-    ("base", "mode"), [(None, BaseMode.HEAD), ("trunk", BaseMode.MERGE_BASE)], ids=["default", "named"]
+    ("base", "expected"), [(None, FOLLOW_HEAD), ("trunk", FOLLOW_MERGE_BASE)], ids=["default", "named"]
 )
-def test_a_new_review_starts_against_head_unless_a_base_branch_is_named(base: str | None, mode: BaseMode) -> None:
-    assert starting_base(base) is mode
+def test_a_new_review_starts_against_head_unless_a_base_branch_is_named(base: str | None, expected: BaseChoice) -> None:
+    assert starting_base(base) == expected

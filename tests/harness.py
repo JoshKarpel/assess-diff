@@ -22,10 +22,11 @@ from counterweight.events import MouseUp
 from counterweight.geometry import Position
 from counterweight.paint import Frame
 
-from assess_diff.diff import BaseMode
 from assess_diff.diff import Diff
 from assess_diff.git import find_repository
 from assess_diff.preferences import PreferencesFile
+from assess_diff.review import FOLLOW_HEAD
+from assess_diff.review import BaseChoice
 from assess_diff.review import Review
 from assess_diff.storage import OpenReview
 from assess_diff.storage import ReviewStore
@@ -94,10 +95,12 @@ class Harness:
         quit_with: AutopilotStep = Quit(),
         open_review: Callable[[OpenReview], OpenReview] = lambda opened: opened,
         initial_diff: Diff | None = None,
+        base: BaseChoice = FOLLOW_HEAD,
         recording: Recording | None = None,
     ) -> OpenReview:
         """
         Runs the app, given `initial_diff` to draw until it computes its own, until the diff shows `loaded`,
+        on a review against `base` unless one is stored already,
         then takes `steps`, then quits; returns the open review.
         `recording` records every frame the app writes, which a screenshot, taken only once the app settles, can't.
         """
@@ -108,7 +111,7 @@ class Harness:
             opened = OpenReview(self.store, loaded_review.review, loaded_review.digest, lambda: "forked", lambda: CLOCK)
         else:
             started = Review.start(
-                REVIEW_ID, repository.common_dir, repository.worktree, repository.branch, BaseMode.HEAD, CLOCK
+                REVIEW_ID, repository.common_dir, repository.worktree, repository.branch, base, CLOCK
             )
             opened = OpenReview(self.store, started, None, lambda: "forked", lambda: CLOCK)
         opened = open_review(opened)
