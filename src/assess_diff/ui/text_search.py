@@ -25,6 +25,7 @@ from counterweight.focus import ElementHandle
 from counterweight.focus import FocusHandle
 from counterweight.handlers import on_click
 from counterweight.headless import use_text_input
+from counterweight.hooks import Editor
 from counterweight.hooks import use_rects
 from counterweight.hooks import use_ref
 from counterweight.keys import Key
@@ -103,7 +104,7 @@ def tally(query: str, found: tuple[Match, ...], highlighted: int | None) -> str:
 @component
 def text_search(
     query: str,
-    set_query: Callable[[Callable[[str], str]], None],
+    set_query: Editor[str],
     handle: FocusHandle,
     found: tuple[Match, ...],
     highlighted: int | None,
