@@ -1,8 +1,8 @@
 """
 The diff view as a sequence of positions the cursor can be on, and how the cursor moves through them.
 
-A `Document` lays out the summary, each file's header, its rows (in the unified or split view),
-and each comment after the row it ends on, in display order.
+A `Document` lays out the summary, each file's header, its rows (in the unified or split view,
+of the whole file or of its hunks with their context), and each comment after the row it ends on, in display order.
 The cursor is a position value rather than an index, so it survives the diff reloading under it.
 
 One cursor over every position, rather than counterweight focus on each hunk,
@@ -31,6 +31,16 @@ class ViewMode(StrEnum):
     UNIFIED = "unified"
     SPLIT = "split"
 
+
+class Scope(StrEnum):
+    """How much of each file the view shows: all of it, or only its hunks and their context."""
+
+    WHOLE = "whole"
+    CONTEXT = "context"
+
+
+CONTEXT_ROWS = 3
+"""How many unchanged rows `Scope.CONTEXT` shows either side of a change, as git and GitHub do by default."""
 
 type Row = Line | SplitRow
 
@@ -101,9 +111,19 @@ class FileLayout:
     index `-1` holds the comments drawn under the header, for a file with no row to put them after.
     """
     hunk_starts: frozenset[int]
+    hidden: tuple[tuple[int, int], ...]
+    """
+    For each row index with unchanged rows hidden before it, how many,
+    with index `len(rows)` for those hidden after the last row.
+    Each hidden row is one unchanged line, in either view.
+    """
 
     def comments_after(self, index: int) -> tuple[int, ...]:
         return next((numbers for at, numbers in self.placed if at == index), ())
+
+    def hidden_before(self, index: int) -> int:
+        """How many unchanged rows are hidden between row `index` and the row before it (or the file's start)."""
+        return next((count for at, count in self.hidden if at == index), 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +131,7 @@ class Document:
     diff: Diff
     """The diff this lays out, so whoever has a document has the diff too."""
     mode: ViewMode
+    scope: Scope
     files: tuple[FileLayout, ...]
     orphans: tuple[int, ...]
     """Comments on files no longer in the diff, drawn after every file."""
@@ -162,6 +183,52 @@ def place(rows: tuple[Row, ...], comment: Comment) -> int:
     return best
 
 
+def commented(rows: tuple[Row, ...], comment: Comment) -> Iterator[int]:
+    """
+    The indexes of the rows a comment is about, which `folded` keeps in view:
+    those showing a line of its range, and the one it's drawn after,
+    which for an outdated comment is the last row before where its lines were.
+    """
+    anchor = comment.anchor
+    if isinstance(anchor, FileAnchor):
+        return
+    for index, row in enumerate(rows):
+        if any(line.side is anchor.side and anchor.start <= line.number <= anchor.end for line in row_lines(row)):
+            yield index
+    if (after := place(rows, comment)) >= 0:
+        yield after
+
+
+def folded(rows: tuple[Row, ...], comments: tuple[Comment, ...]) -> tuple[tuple[Row, ...], tuple[tuple[int, int], ...]]:
+    """
+    A file's `rows` with each run of two or more unchanged ones more than `CONTEXT_ROWS` from a change hidden,
+    and how many are hidden before each row that's kept, as `FileLayout.hidden` holds them.
+    A lone row isn't hidden, since the line saying so would take as much room as it does.
+    The rows `comments` are about stay in view with their context too,
+    so no comment is drawn after a row far from the lines it's about.
+    """
+    wanted = {index for index, row in enumerate(rows) if any(line.hunk is not None for line in row_lines(row))}
+    for comment in comments:
+        wanted.update(commented(rows, comment))
+    near = {
+        close
+        for index in wanted
+        for close in range(max(0, index - CONTEXT_ROWS), min(len(rows), index + CONTEXT_ROWS + 1))
+    }
+    # Either side of a lone row is a row that's kept or one of the file's ends.
+    edged = near | {-1, len(rows)}
+    kept = sorted(near | {index for index in range(len(rows)) if index - 1 in edged and index + 1 in edged})
+    hidden: list[tuple[int, int]] = []
+    previous = -1
+    for shown, index in enumerate(kept):
+        if index > previous + 1:
+            hidden.append((shown, index - previous - 1))
+        previous = index
+    if len(rows) > previous + 1:
+        hidden.append((len(kept), len(rows) - previous - 1))
+    return tuple(rows[index] for index in kept), tuple(hidden)
+
+
 def hunk_starts(rows: tuple[Row, ...]) -> frozenset[int]:
     starts: set[int] = set()
     previous: frozenset[int] = frozenset()
@@ -173,8 +240,16 @@ def hunk_starts(rows: tuple[Row, ...]) -> frozenset[int]:
     return frozenset(starts)
 
 
-def layout_file(file: FileDiff, comments: tuple[Comment, ...], mode: ViewMode) -> FileLayout:
+def layout_file(file: FileDiff, comments: tuple[Comment, ...], mode: ViewMode, scope: Scope) -> FileLayout:
     rows = rows_of(file, mode)
+    hidden: tuple[tuple[int, int], ...] = ()
+    match scope:
+        case Scope.WHOLE:
+            pass
+        case Scope.CONTEXT:
+            rows, hidden = folded(rows, comments)
+        case _ as unreachable:
+            assert_never(unreachable)
     placed: dict[int, list[int]] = {}
     for comment in comments:
         placed.setdefault(place(rows, comment), []).append(comment.number)
@@ -183,6 +258,7 @@ def layout_file(file: FileDiff, comments: tuple[Comment, ...], mode: ViewMode) -
         rows=rows,
         placed=tuple((index, tuple(numbers)) for index, numbers in sorted(placed.items())),
         hunk_starts=hunk_starts(rows),
+        hidden=hidden,
     )
 
 
@@ -191,15 +267,15 @@ def placements(comments: tuple[Comment, ...]) -> tuple[tuple[int, Anchor], ...]:
     return tuple((comment.number, comment.anchor) for comment in comments)
 
 
-def build_document(diff: Diff, comments: tuple[Comment, ...], mode: ViewMode) -> Document:
+def build_document(diff: Diff, comments: tuple[Comment, ...], mode: ViewMode, scope: Scope) -> Document:
     """
-    The positions of `diff` in `mode`, with `comments` placed among them.
+    The positions of `diff` in `mode` and `scope`, with `comments` placed among them.
     It reads only what `placements` returns of the comments, which the app memoizes it on,
     so that typing in a comment doesn't lay out the whole diff again: reading more of them here means returning it there.
     """
     paths = {file.path for file in diff.files}
     files = tuple(
-        layout_file(file, tuple(comment for comment in comments if comment.anchor.path == file.path), mode)
+        layout_file(file, tuple(comment for comment in comments if comment.anchor.path == file.path), mode, scope)
         for file in diff.files
     )
     orphans = tuple(comment.number for comment in comments if comment.anchor.path not in paths)
@@ -210,7 +286,15 @@ def build_document(diff: Diff, comments: tuple[Comment, ...], mode: ViewMode) ->
         if is_stop:
             stops.append(len(positions))
         positions.append(position)
-    return Document(diff=diff, mode=mode, files=files, orphans=orphans, positions=tuple(positions), stops=tuple(stops))
+    return Document(
+        diff=diff,
+        mode=mode,
+        scope=scope,
+        files=files,
+        orphans=orphans,
+        positions=tuple(positions),
+        stops=tuple(stops),
+    )
 
 
 def document_positions(files: tuple[FileLayout, ...], orphans: tuple[int, ...]) -> Iterator[tuple[Position, bool]]:
@@ -298,23 +382,35 @@ def recovered(document: Document, cursor: Position) -> Position:
 
 
 def converted(cursor: Position, before: Document, after: Document) -> Position:
-    """The cursor's position in `after`, a layout of the same diff in the other view, on the same line."""
+    """
+    The cursor's position in `after`, a layout of the same diff in another view or scope:
+    on the same line, or where `after` hides it, on the nearest line it shows (the earlier, of two as near),
+    or on the file's header when it shows none.
+    """
     if not isinstance(cursor, RowAt):
         return cursor
     old_layout = before.file(cursor.path)
     new_layout = after.file(cursor.path)
     if old_layout is None or new_layout is None:
         return recovered(after, cursor)
-    line = primary(old_layout.rows[cursor.index])
-    index = next(index for index, row in enumerate(new_layout.rows) if line in row_lines(row))
-    return RowAt(cursor.path, index)
+    if not new_layout.rows:
+        return HeaderAt(cursor.path)
+    order = {line: index for index, line in enumerate(new_layout.file.lines)}
+    target = order[primary(old_layout.rows[cursor.index])]
+    distances = [min(abs(order[line] - target) for line in row_lines(row)) for row in new_layout.rows]
+    return RowAt(cursor.path, distances.index(min(distances)))
 
 
-def in_mode(document: Document | None, cursor: Position, comments: tuple[Comment, ...], mode: ViewMode) -> Position:
-    """Where the cursor goes when the view switches to `mode`: on the same line, or where it is if nothing's shown."""
+def in_view(
+    document: Document | None, cursor: Position, comments: tuple[Comment, ...], mode: ViewMode, scope: Scope
+) -> Position:
+    """
+    Where the cursor goes when the view switches to `mode` or `scope`: on the same line, or the nearest shown,
+    or where it is if nothing's shown.
+    """
     if document is None:
         return cursor
-    return converted(cursor, document, build_document(document.diff, comments, mode))
+    return converted(cursor, document, build_document(document.diff, comments, mode, scope))
 
 
 def comment_row(document: Document | None, number: int) -> Position:

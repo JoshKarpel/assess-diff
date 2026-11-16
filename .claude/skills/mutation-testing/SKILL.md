@@ -93,6 +93,22 @@ A survivor that matches no entry is a hole until shown otherwise.
   With `--verify`, `--quiet` only turns a missing ref's exit 128 into a silent exit 1.
   Both raise `GitError`, which the loop discards, and an existing ref resolves either way.
 
+### `navigation.py`
+
+- `commented`: the range check's `<= anchor.end` becomes `< anchor.end`.
+  The row showing line `anchor.end` is the one `place` returns, which `commented` yields as well.
+- `commented`: `place(...) >= 0` becomes `> 0` or `>= 1`, so row 0 is never yielded as the row a comment follows.
+  The working tree's numbers run from 1 without a gap, so `place` returns row 0 for a new-side comment
+  only when its range starts at line 1, which the range check yields;
+  for an old-side comment, the row it returns is a removed line's, which is always kept as a change.
+- `folded`: the context's lower bound `max(0, ...)` becomes `max(1, ...)`.
+  Row 0, then left out of `near`, is a lone row between the file's start and row 1 (in `near`, or the file's end),
+  which the lone-row rule keeps.
+- `folded`: `index > previous + 1` or `len(rows) > previous + 1` becomes `+ 2`.
+  The lone-row rule keeps every gap of one row, so no gap is exactly one row long, and both forms agree on every other.
+- `from_version_1`: the `"version"` key respelled times out rather than surviving:
+  the document stays at version 1, so `parse_preferences` migrates it forever.
+
 ### `ui/diff_view.py`
 
 - `press_rows`, `press`, `finish_on_escape`: the trailing `case _: return None` dropped.

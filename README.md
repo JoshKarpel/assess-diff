@@ -3,7 +3,7 @@
 Review an agent's working-tree diff in the terminal while it's still working,
 and hand the review back to it as Markdown.
 
-`assess-diff` shows every changed file whole, in one scroll, reloading as files change.
+`assess-diff` shows every changed file's hunks, or with `z` the whole file, in one scroll, reloading as files change.
 You comment on any line or range, write a summary,
 and copy the review (`c`) to paste into the agent, comments in the order you wrote them,
 each with a `path:line` reference,
@@ -11,7 +11,7 @@ and the lines it was about where they've changed since.
 Reviews are saved as you type, under `$XDG_DATA_HOME/assess-diff/`,
 and belong to the repository, across its worktrees.
 
-![Commenting on a range of lines and a whole file, going to a comment by its number, the split view, choosing a syntax theme, writing the summary, and copying the review](https://raw.githubusercontent.com/JoshKarpel/assess-diff/main/demo/demo.gif)
+![Commenting on a range of lines and a whole file, going to a comment by its number, the split view, whole files, choosing a syntax theme, writing the summary, and copying the review](https://raw.githubusercontent.com/JoshKarpel/assess-diff/main/demo/demo.gif)
 
 It's built on [counterweight](https://www.counterweight.dev/).
 
@@ -41,8 +41,11 @@ Left and Right (or `h` and `l`, a sideways swipe, or Shift and the wheel) scroll
 keeping the line numbers in place, and `0` scrolls back to the start.
 The file picker on the left (`f`) jumps to a file, or to the summary from its entry at the top,
 and `/` there narrows it to the paths matching what you type.
-`s` switches between the unified and split views, and `t` picks a syntax theme, previewing each as you go.
-Both are kept as preferences, under `$XDG_CONFIG_HOME/assess-diff/`.
+Each hunk shows with three lines of context either side, and a line saying how many unchanged lines are hidden between;
+lines a comment is on stay in view with their context too.
+`z` switches between that and whole files,
+`s` between the unified and split views, and `t` picks a syntax theme, previewing each as you go.
+All three are kept as preferences, under `$XDG_CONFIG_HOME/assess-diff/`.
 
 Enter comments on the selected lines, or, on a file's header, on the whole file.
 Comments are numbered in the order you write them, and numbers are never reused,

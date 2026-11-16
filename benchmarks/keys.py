@@ -4,6 +4,7 @@ How long the app takes to answer a key, on generated diffs of a few sizes.
 Each workload starts the whole app headless on a generated repository, as the tests do,
 then presses a key (or a few in turn) over and over, timing each press from the render before it to the render after it.
 The repositories are the same on every run, so runs on one machine compare.
+The app shows whole files, the view that draws the most rows and so takes the longest to answer.
 `just bench` runs them all; `just profile` runs one under the sampling profiler.
 """
 
@@ -30,6 +31,8 @@ from counterweight.events import KeyPressed
 from counterweight.events import TerminalResized
 from counterweight.keys import Key
 
+from assess_diff.navigation import Scope
+from assess_diff.preferences import Preferences
 from assess_diff.preferences import PreferencesFile
 from assess_diff.storage import ReviewStore
 from tests.conftest import Scratch
@@ -128,11 +131,9 @@ async def press_times(scratch: Scratch, workload: Workload) -> list[float]:
     for press in range(workload.presses):
         steps += [workload.keys[press % len(workload.keys)], rendered]
     with tempfile.TemporaryDirectory() as data:
-        harness = Harness(
-            scratch=scratch,
-            store=ReviewStore(Path(data) / "reviews"),
-            preferences=PreferencesFile(Path(data) / "preferences.json"),
-        )
+        preferences = PreferencesFile(Path(data) / "preferences.json")
+        preferences.save(Preferences.defaults().model_copy(update={"scope": Scope.WHOLE}))
+        harness = Harness(scratch=scratch, store=ReviewStore(Path(data) / "reviews"), preferences=preferences)
         await harness.run(steps)
     return [after - before for before, after in pairwise(stamps)]
 
