@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
-    "counterweight>=0.1.1",
+    "counterweight>=0.2.0",
     "pydantic>=2.11",
     "pygments>=2.17",
     "watchfiles>=1.0",
@@ -68,7 +68,10 @@ exclude-newer-package = { counterweight = false, waxy = false }
 addopts = ["--strict-markers", "-Werror", "--ignore-glob=mutants/*"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-faulthandler_timeout = 30
+asyncio_default_fixture_loop_scope = "function"
+# A watchdog for hangs, so far above the slowest healthy test that load never reaches it:
+# the fuzz test takes 13-18s on a macOS runner, and past 30s when the runner is busy.
+faulthandler_timeout = 300
 faulthandler_exit_on_timeout = true
 
 [tool.mypy]

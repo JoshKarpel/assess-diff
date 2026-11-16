@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -125,6 +126,11 @@ class Harness:
                 initial_diff,
                 self.store.listed().unreadable,
             ),
+            # counterweight binds these defaults to the streams in place when it's first imported,
+            # which mutmut has closed by the time it runs the tests a second time in the same process.
+            output_stream=sys.stdout,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
             headless=True,
             dimensions=(WIDTH, HEIGHT),
             autopilot=[showing(loaded), *steps, quit_with],

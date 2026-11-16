@@ -27,6 +27,7 @@ from counterweight.focus import FocusHandle
 from counterweight.handlers import on_click
 from counterweight.handlers import scroll_on_wheel
 from counterweight.headless import use_text_input
+from counterweight.hooks import Editor
 from counterweight.hooks import use_state
 from counterweight.keys import Key
 from counterweight.styles.utilities import *
@@ -72,7 +73,7 @@ def highlighted_theme(themes: tuple[str, ...], query: Query) -> str | None:
 def theme_picker(
     themes: tuple[str, ...],
     query: Query,
-    set_query: Callable[[Callable[[Query], Query]], None],
+    set_query: Editor[Query],
     handle: FocusHandle,
     choose: Callable[[str], InputResponse],
     cancel: Callable[[], InputResponse],
@@ -83,8 +84,8 @@ def theme_picker(
     """
     highlighted_match, _ = use_state(ElementHandle)
 
-    def edit(edit_text: Callable[[str], str]) -> None:
-        set_query(lambda q: q.edited(edit_text(q.text)))
+    def edit(edit_text: Callable[[str], str]) -> str:
+        return set_query(lambda q: q.edited(edit_text(q.text))).text
 
     field = use_text_input(query.text, edit, handle=handle)
     shown = matches(query.text, themes)

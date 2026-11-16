@@ -20,6 +20,7 @@ from counterweight.events import Receiver
 from counterweight.focus import FocusHandle
 from counterweight.handlers import on_click
 from counterweight.headless import use_text_input
+from counterweight.hooks import Editor
 from counterweight.keys import Key
 from counterweight.styles.utilities import *
 
@@ -69,7 +70,7 @@ def preview(number: str, found: Comment | None) -> tuple[Chunk, ...]:
 @component
 def comment_jump(
     number: str,
-    set_number: Callable[[Callable[[str], str]], None],
+    set_number: Editor[str],
     handle: FocusHandle,
     found: Comment | None,
     go: Callable[[int], InputResponse],
@@ -80,8 +81,8 @@ def comment_jump(
     and looks up the comment it names as `found`. Only digits can be typed.
     """
 
-    def only_digits(edit: Callable[[str], str]) -> None:
-        set_number(lambda latest: new if (new := edit(latest)).isdigit() or not new else latest)
+    def only_digits(edit: Callable[[str], str]) -> str:
+        return set_number(lambda latest: new if (new := edit(latest)).isdigit() or not new else latest)
 
     field = use_text_input(number, only_digits, handle=handle)
 

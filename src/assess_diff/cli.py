@@ -170,8 +170,12 @@ async def review_command(workspace: Workspace, new: bool, review_id: str | None,
             diff,
             listing.unreadable,
         ),
+        # Every stream is passed, since counterweight's defaults are the ones in place when it was first imported,
+        # which the tests' runs in one process (mutmut's) have closed by the second.
         input_stream=sys.stdin,
         output_stream=sys.stdout,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
         title="assess-diff",
     )
     saved = open_review.review
