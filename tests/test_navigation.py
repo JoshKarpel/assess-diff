@@ -21,6 +21,7 @@ from assess_diff.navigation import converted
 from assess_diff.navigation import extended
 from assess_diff.navigation import hunk_starts
 from assess_diff.navigation import in_view
+from assess_diff.navigation import lines_by_side
 from assess_diff.navigation import moved
 from assess_diff.navigation import next_comment
 from assess_diff.navigation import next_stop
@@ -161,7 +162,7 @@ def test_primary_of_a_unified_row_is_itself() -> None:
 def test_place_after_the_row_ending_the_range_or_the_last_before_it(end: int, side: Side, expected: int) -> None:
     placed = comment(1, "app.py", end, end, (), side=side)
 
-    assert place(APP.lines, placed) == expected
+    assert place(lines_by_side(APP.lines), placed) == expected
 
 
 def test_hunk_starts_at_each_hunks_first_row() -> None:

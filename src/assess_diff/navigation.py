@@ -11,7 +11,10 @@ since reaching a line between hunks would then need a second cursor handed off a
 
 from __future__ import annotations
 
+from bisect import bisect_left
+from bisect import bisect_right
 from collections.abc import Iterator
+from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field
 from enum import StrEnum
@@ -21,6 +24,7 @@ from assess_diff.diff import Diff
 from assess_diff.diff import FileDiff
 from assess_diff.diff import Line
 from assess_diff.diff import LineKind
+from assess_diff.diff import Side
 from assess_diff.diff import SplitRow
 from assess_diff.diff import split_rows
 from assess_diff.review import Anchor
@@ -165,39 +169,59 @@ class Document:
         return tuple(index for index, position in enumerate(self.positions) if isinstance(position, CommentAt))
 
 
-def place(rows: tuple[Row, ...], comment: Comment) -> int:
+@dataclass(frozen=True, slots=True)
+class SideLines:
     """
-    The index of the row a comment is drawn after: the one showing the last line of its range,
-    or, when that line is gone, the last row before where it was, or `-1` when there's none,
-    which is where a comment on the whole file goes too, under its header.
+    One side's line numbers in the order a file's rows show them, with the index of the row showing each,
+    which `place` and `commented` search to find a comment's rows without a pass over them for every comment.
+    A side's numbers only grow down the rows, and a row shows at most one line of each side,
+    so `numbers` is sorted and has no repeats.
+    """
+
+    numbers: tuple[int, ...]
+    rows: tuple[int, ...]
+
+
+def lines_by_side(rows: tuple[Row, ...]) -> Mapping[Side, SideLines]:
+    """Each side's `SideLines` for `rows`, in one pass over them."""
+    numbers: dict[Side, list[int]] = {side: [] for side in Side}
+    indexes: dict[Side, list[int]] = {side: [] for side in Side}
+    for index, row in enumerate(rows):
+        for line in row_lines(row):
+            numbers[line.side].append(line.number)
+            indexes[line.side].append(index)
+    return {side: SideLines(numbers=tuple(numbers[side]), rows=tuple(indexes[side])) for side in Side}
+
+
+def place(lines: Mapping[Side, SideLines], comment: Comment) -> int:
+    """
+    The index of the row a comment is drawn after, from its file's `lines_by_side`:
+    the one showing the last line of its range, or, when that line is gone, the last row before where it was,
+    or `-1` when there's none, which is where a comment on the whole file goes too, under its header.
     """
     anchor = comment.anchor
     if isinstance(anchor, FileAnchor):
         return -1
-    best = -1
-    for index, row in enumerate(rows):
-        for line in row_lines(row):
-            if line.side is anchor.side and line.number <= anchor.end:
-                best = index
-                if line.number == anchor.end:
-                    return index
-    return best
+    shown = lines[anchor.side]
+    last = bisect_right(shown.numbers, anchor.end) - 1
+    return shown.rows[last] if last >= 0 else -1
 
 
-def commented(rows: tuple[Row, ...], comment: Comment) -> Iterator[int]:
+def commented(lines: Mapping[Side, SideLines], comment: Comment) -> tuple[int, ...]:
     """
-    The indexes of the rows a comment is about, which `folded` keeps in view:
-    those showing a line of its range, and the one it's drawn after,
-    which for an outdated comment is the last row before where its lines were.
+    The indexes of the rows a comment is about, from its file's `lines_by_side`, which `folded` keeps in view:
+    those showing a line of its range, or, when none of its lines are left, the last row before where they were,
+    which is the one `place` draws it after.
     """
     anchor = comment.anchor
     if isinstance(anchor, FileAnchor):
-        return
-    for index, row in enumerate(rows):
-        if any(line.side is anchor.side and anchor.start <= line.number <= anchor.end for line in row_lines(row)):
-            yield index
-    if (after := place(rows, comment)) >= 0:
-        yield after
+        return ()
+    shown = lines[anchor.side]
+    first = bisect_left(shown.numbers, anchor.start)
+    last = bisect_right(shown.numbers, anchor.end)
+    if first < last:
+        return shown.rows[first:last]
+    return shown.rows[max(0, first - 1) : first]
 
 
 def folded(rows: tuple[Row, ...], comments: tuple[Comment, ...]) -> tuple[tuple[Row, ...], tuple[tuple[int, int], ...]]:
@@ -209,8 +233,10 @@ def folded(rows: tuple[Row, ...], comments: tuple[Comment, ...]) -> tuple[tuple[
     so no comment is drawn after a row far from the lines it's about.
     """
     wanted = {index for index, row in enumerate(rows) if any(line.hunk is not None for line in row_lines(row))}
-    for comment in comments:
-        wanted.update(commented(rows, comment))
+    # Indexing the rows is a pass over them, which a file without comments has no use for.
+    if comments:
+        lines = lines_by_side(rows)
+        wanted.update(index for comment in comments for index in commented(lines, comment))
     near = {
         close
         for index in wanted
@@ -252,8 +278,11 @@ def layout_file(file: FileDiff, comments: tuple[Comment, ...], mode: ViewMode, s
         case _ as unreachable:
             assert_never(unreachable)
     placed: dict[int, list[int]] = {}
-    for comment in comments:
-        placed.setdefault(place(rows, comment), []).append(comment.number)
+    # As in `folded`, only a file with comments is worth indexing.
+    if comments:
+        lines = lines_by_side(rows)
+        for comment in comments:
+            placed.setdefault(place(lines, comment), []).append(comment.number)
     return FileLayout(
         file=file,
         rows=rows,

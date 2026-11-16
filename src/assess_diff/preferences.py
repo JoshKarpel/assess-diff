@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +17,8 @@ from pydantic import ConfigDict
 from pydantic import field_validator
 from pygments.styles import get_all_styles
 
+from assess_diff.migration import Migration
+from assess_diff.migration import migrated
 from assess_diff.navigation import Scope
 from assess_diff.navigation import ViewMode
 
@@ -51,9 +52,6 @@ class Preferences(BaseModel):
 
 CURRENT_VERSION = 2
 
-type Migration = Callable[[Mapping[str, object]], dict[str, object]]
-"""A preferences file's document at one version, rewritten as the next version would have written it."""
-
 
 def from_version_1(document: Mapping[str, object]) -> dict[str, object]:
     """Version 2 adds `scope`, which a version 1 file takes at its default: hunks and their context."""
@@ -70,16 +68,12 @@ def parse_preferences(content: bytes) -> Preferences:
     Preferences from a file's content, migrated to the current version if an older one wrote it.
 
     Raises:
-        pydantic.ValidationError: If it isn't preferences this version reads, a newer version's included.
+        UnknownVersion: If a newer version wrote it, or it has no version.
+        pydantic.ValidationError: If it isn't a JSON object, or has a field missing or malformed.
     """
     document = json.loads(content)
-    # `type(...) is int`, since JSON's `true` and `1.0` equal 1 (and `true` hashes as 1), but no version wrote them.
-    while (
-        isinstance(document, dict)
-        and type(version := document.get("version")) is int
-        and (migrate := MIGRATIONS.get(version)) is not None
-    ):
-        document = migrate(document)
+    if isinstance(document, dict):
+        document = migrated(document, MIGRATIONS, CURRENT_VERSION)
     return Preferences.model_validate(document)
 
 

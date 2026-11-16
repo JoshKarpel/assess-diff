@@ -267,10 +267,11 @@ def status_line(review: Review, diff: Diff | None, mode: ViewMode) -> tuple[tupl
     )
 
 
-def key_hints(session: Session, are_keys_shown: bool) -> tuple[str, ...]:
+def key_hints(session: Session, scope: Scope, are_keys_shown: bool) -> tuple[str, ...]:
     """
     The keys of what has focus, each with what it does; the diff's are folded away unless `are_keys_shown`,
     but a dialog's or a confirmation's always show.
+    `z`'s says what it would do from `scope`: unfold the unchanged lines it hides, or fold them away.
     """
     if session.naming is not None:
         return ("enter rename", "esc keep the old name")
@@ -297,7 +298,7 @@ def key_hints(session: Session, are_keys_shown: bool) -> tuple[str, ...]:
         "r summary",
         "e rename",
         "s split",
-        "z fold unchanged",
+        "z unfold unchanged" if scope is Scope.CONTEXT else "z fold unchanged",
         "b base",
         "t theme",
         "f files",
@@ -738,7 +739,7 @@ def assess_app(
     comment_counts = tuple(
         sum(comment.anchor.path == file.path for comment in review.comments) for file in picker_files
     )
-    hints = key_hints(session, are_keys_shown)
+    hints = key_hints(session, scope, are_keys_shown)
 
     return Div(
         style=col,

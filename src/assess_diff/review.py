@@ -25,6 +25,9 @@ from assess_diff.diff import FileDiff
 from assess_diff.diff import Line
 from assess_diff.diff import LineKind
 from assess_diff.diff import Side
+from assess_diff.migration import Migration
+from assess_diff.migration import UnknownVersion
+from assess_diff.migration import migrated
 
 
 class NewAnchor(BaseModel):
@@ -146,9 +149,6 @@ class UnreadableReview(Exception):
     """A review file that can't be read: it isn't a review, or a newer version of assess-diff wrote it."""
 
 
-type Migration = Callable[[Mapping[str, object]], dict[str, object]]
-"""A review file's document at one version, rewritten as the next version would have written it."""
-
 # Each version's migration to the next, by the version it migrates from.
 MIGRATIONS: Mapping[int, Migration] = {}
 
@@ -164,16 +164,10 @@ def parse_review(content: bytes, migrations: Mapping[int, Migration] = MIGRATION
     document = json.loads(content)
     if not isinstance(document, dict):
         raise UnreadableReview("A review file holds a JSON object")
-    # `type(...) is int` rather than `isinstance`, and checked even at the current version,
-    # since JSON's `true` and `1.0` compare equal to 1 (and `true` hashes as 1 in `migrations`), but no version wrote them.
-    while type(version := document.get("version")) is not int or version != CURRENT_VERSION:
-        migrate = migrations.get(version) if type(version) is int else None
-        if migrate is None:
-            raise UnreadableReview(
-                f"This review is version {version!r}, and this assess-diff reads up to version {CURRENT_VERSION}"
-            )
-        document = migrate(document)
-    return Review.model_validate(document)
+    try:
+        return Review.model_validate(migrated(document, migrations, CURRENT_VERSION))
+    except UnknownVersion as error:
+        raise UnreadableReview(f"This review is {error}") from error
 
 
 def default_name(started: datetime) -> str:

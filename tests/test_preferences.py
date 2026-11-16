@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from assess_diff.migration import UnknownVersion
 from assess_diff.navigation import Scope
 from assess_diff.navigation import ViewMode
 from assess_diff.preferences import Preferences
@@ -64,14 +65,14 @@ def test_a_version_1_file_loads_with_hunks_and_its_other_choices_kept() -> None:
 
 
 @pytest.mark.parametrize(
-    "version",
-    ["3", "true", "1.0", '"1"'],
+    ("version", "shown"),
+    [("3", "3"), ("true", "True"), ("1.0", r"1\.0"), ('"1"', "'1'")],
     ids=["newer", "true", "float", "string"],
 )
-def test_a_version_no_migration_reads_fails_to_parse(version: str) -> None:
+def test_a_version_no_migration_reads_fails_to_parse(version: str, shown: str) -> None:
     content = f'{{"version": {version}, "view_mode": "split", "scope": "whole", "theme": "monokai"}}'
 
-    with pytest.raises(ValidationError, match="version"):
+    with pytest.raises(UnknownVersion, match=rf"^version {shown}, and this assess-diff reads up to version 2$"):
         parse_preferences(content.encode())
 
 

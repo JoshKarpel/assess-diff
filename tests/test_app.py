@@ -828,7 +828,7 @@ HANDLE = FocusHandle()
 
 
 def test_key_hints_list_the_diffs_keys() -> None:
-    assert key_hints(INITIAL_SESSION, True) == (
+    assert key_hints(INITIAL_SESSION, Scope.WHOLE, True) == (
         "↑↓←→ move",
         "⇧↑↓ select",
         "tab hunk/comment",
@@ -849,6 +849,16 @@ def test_key_hints_list_the_diffs_keys() -> None:
         "⇧? fold keys",
         "q quit",
     )
+
+
+@pytest.mark.parametrize(
+    ("scope", "hint"),
+    [(Scope.CONTEXT, "z unfold unchanged"), (Scope.WHOLE, "z fold unchanged")],
+)
+def test_key_hints_say_z_does_the_opposite_of_the_scope_shown(scope: Scope, hint: str) -> None:
+    hints = key_hints(INITIAL_SESSION, scope, True)
+
+    assert [h for h in hints if h.startswith("z ")] == [hint]
 
 
 @pytest.mark.parametrize(
@@ -875,7 +885,7 @@ async def test_the_app_starts_saying_a_review_file_cant_be_read(harness: Harness
 
 
 def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
-    assert key_hints(INITIAL_SESSION, False) == ()
+    assert key_hints(INITIAL_SESSION, Scope.CONTEXT, False) == ()
 
 
 @pytest.mark.parametrize(
@@ -903,7 +913,7 @@ def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
     ids=["naming", "jumping", "managing", "picking-theme", "editing", "confirming-delete"],
 )
 def test_key_hints_list_the_keys_of_what_has_focus_even_folded(session: Session, hints: tuple[str, ...]) -> None:
-    assert key_hints(session, False) == hints
+    assert key_hints(session, Scope.CONTEXT, False) == hints
 
 
 def test_pills_pad_each_group_on_its_background_a_bare_space_apart_keeping_its_words_together() -> None:
