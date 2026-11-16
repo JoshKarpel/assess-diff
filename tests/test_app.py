@@ -11,6 +11,7 @@ from counterweight.controls import CopyToClipboard
 from counterweight.elements import Chunk
 from counterweight.events import KeyPressed
 from counterweight.focus import FocusHandle
+from counterweight.headless import Highlight
 from counterweight.keys import Key
 from counterweight.styles.utilities import text_bg
 from counterweight.styles.utilities import text_bold
@@ -989,7 +990,9 @@ def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
             ("↑↓ choose", "enter open", "e rename", "dd delete", "esc close"),
         ),
         (
-            replace(INITIAL_SESSION, picking_theme=PickingTheme(HANDLE, Query(text="mono", highlighted=2))),
+            replace(
+                INITIAL_SESSION, picking_theme=PickingTheme(HANDLE, Query(text="mono", highlight=Highlight(index=2)))
+            ),
             ("type to filter", "↑↓ preview", "enter keep", "esc revert"),
         ),
         (

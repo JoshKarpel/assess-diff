@@ -5,11 +5,10 @@ previewing the highlighted one on the diff behind it.
 
 from __future__ import annotations
 
-import glob
 from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import field
 from dataclasses import replace
-from fnmatch import fnmatchcase
 from functools import partial
 
 from counterweight.components import component
@@ -26,8 +25,11 @@ from counterweight.focus import ElementHandle
 from counterweight.focus import FocusHandle
 from counterweight.handlers import on_click
 from counterweight.handlers import scroll_on_wheel
+from counterweight.headless import Highlight
+from counterweight.headless import subsequence_matches
 from counterweight.headless import use_text_input
 from counterweight.hooks import Editor
+from counterweight.hooks import get_state
 from counterweight.hooks import use_state
 from counterweight.keys import Key
 from counterweight.styles.utilities import *
@@ -37,36 +39,29 @@ SHOWN_ROWS = 12
 dialog_box = position_absolute | inset(0) | margin_auto | fit_content_height | z(1)
 
 
-def matches(text: str, candidates: tuple[str, ...]) -> tuple[str, ...]:
-    """
-    The candidates holding the typed letters in order, with anything between them, ignoring case,
-    with the one the text names exactly first, so typing a whole name and pressing Enter chooses it.
-    """
-    pattern = f"*{'*'.join(glob.escape(letter) for letter in text.lower())}*"
-    found = [candidate for candidate in candidates if fnmatchcase(candidate.lower(), pattern)]
-    return tuple(sorted(found, key=lambda candidate: candidate.lower() != text.lower()))
-
-
 @dataclass(frozen=True, slots=True)
 class Query:
-    """What's typed in the picker, and which of its matches is highlighted."""
+    """What's typed in a picker, and which of its matches is highlighted, which an edit puts back on the first."""
 
-    text: str
-    highlighted: int
-
-    @classmethod
-    def at(cls, themes: tuple[str, ...], current: str) -> Query:
-        """A query with nothing typed, highlighting `current`."""
-        return cls(text="", highlighted=themes.index(current))
+    text: str = ""
+    highlight: Highlight = field(default_factory=Highlight)
 
     def edited(self, text: str) -> Query:
-        return self if text == self.text else Query(text=text, highlighted=0)
+        return self if text == self.text else Query(text=text)
 
+    def matches(self, options: tuple[str, ...]) -> tuple[str, ...]:
+        """The options the picker shows: those holding the typed letters in order, the one the text names exactly first."""
+        return subsequence_matches(self.text, options)
 
-def highlighted_theme(themes: tuple[str, ...], query: Query) -> str | None:
-    """The theme the picker highlights, which the diff behind it previews, or `None` when nothing matches."""
-    shown = matches(query.text, themes)
-    return shown[query.highlighted] if shown else None
+    def highlighted(self, options: tuple[str, ...]) -> str | None:
+        """The match the picker highlights, or `None` when nothing matches."""
+        shown = self.matches(options)
+        index = self.highlight.index_in(shown)
+        return None if index is None else shown[index]
+
+    def moved(self, options: tuple[str, ...], by: int) -> Query:
+        """The highlight `by` matches on, wrapping at the ends."""
+        return replace(self, highlight=self.highlight.moved(self.matches(options), by))
 
 
 @component
@@ -88,18 +83,19 @@ def theme_picker(
         return set_query(lambda q: q.edited(edit_text(q.text))).text
 
     field = use_text_input(query.text, edit, handle=handle)
-    shown = matches(query.text, themes)
-    highlighted = highlighted_theme(themes, query)
+    shown = query.matches(themes)
+    highlighted = query.highlighted(themes)
 
     def on_input(event: InputEvent, receiver: Receiver) -> InputResponse:
         in_view = ScrollIntoView(highlighted_match, block="nearest")
         match event:
             case KeyPressed(key=Key.Down) if shown:
-                set_query(lambda q: replace(q, highlighted=(q.highlighted + 1) % len(shown)))
+                set_query(lambda q: q.moved(themes, 1))
             case KeyPressed(key=Key.Up) if shown:
-                set_query(lambda q: replace(q, highlighted=(q.highlighted - 1) % len(shown)))
-            case KeyPressed(key=Key.Enter) if highlighted is not None:
-                return choose(highlighted)
+                set_query(lambda q: q.moved(themes, -1))
+            # Several keys can arrive before the next render, so Enter chooses what the latest of them left highlighted.
+            case KeyPressed(key=Key.Enter) if (chosen := get_state(set_query).highlighted(themes)) is not None:
+                return choose(chosen)
             case KeyPressed(key=Key.Escape):
                 return cancel()
             case _:

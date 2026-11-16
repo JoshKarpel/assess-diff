@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from counterweight.autopilot import WaitFor
 from counterweight.elements import Chunk
 from counterweight.events import KeyPressed
 from counterweight.keys import Key
@@ -17,9 +19,11 @@ from assess_diff.preferences import PreferencesFile
 from assess_diff.storage import ReviewStore
 from assess_diff.ui.file_picker import DirectoryRow
 from assess_diff.ui.file_picker import FileRow
+from assess_diff.ui.file_picker import SummaryRow
 from assess_diff.ui.file_picker import directory_entry
 from assess_diff.ui.file_picker import file_entry
 from assess_diff.ui.file_picker import marked
+from assess_diff.ui.file_picker import row_key
 from assess_diff.ui.file_picker import tree_rows
 from tests.builders import added
 from tests.builders import file_comment
@@ -107,6 +111,21 @@ def test_tree_rows_compact_a_chain_of_directories_holding_only_a_directory() -> 
         FileRow(index=0, label="one.py", depth=1),
         FileRow(index=1, label="two.py", depth=1),
     )
+
+
+@pytest.mark.parametrize(
+    ("row", "key"),
+    [
+        (SummaryRow(), SummaryRow()),
+        (FileRow(index=3, label="lib.py", depth=1), "src/lib.py"),
+        (DirectoryRow(path="src/app", label="app", depth=1, is_folded=True), "src/app"),
+    ],
+    ids=["summary", "file", "directory"],
+)
+def test_the_trees_highlight_holds_a_row_by_its_path_or_the_summary_by_itself(
+    row: SummaryRow | FileRow | DirectoryRow, key: object
+) -> None:
+    assert row_key(row, PATHS) == key
 
 
 def picker(frame: str) -> str:
@@ -200,3 +219,25 @@ async def test_the_summary_entry_tops_the_picker(harness: Harness) -> None:
     await harness.run([harness.shot()])
 
     assert picker(harness.frames[0]).split()[:2] == ["≡", "Summary"]
+
+
+async def test_the_highlight_stays_on_its_file_as_a_file_appears_above_it(harness: Harness) -> None:
+    def add_a_file_above(_: object) -> bool:
+        harness.scratch.write("a.py", "# a.py\n")
+        return True
+
+    await harness.run(
+        [
+            # The summary, README.md, src/, app/, main.py, views.py, then lib.py.
+            *keys("f", *[Key.Down] * 6),
+            WaitFor(add_a_file_above, timeout=timedelta(seconds=10)),
+            showing("a.py"),
+            ENTER,
+            *keys(Key.Down),
+            ENTER,
+            *typed("lib"),
+            ESCAPE,
+        ]
+    )
+
+    assert [c.anchor.path for c in harness.review().comments] == ["src/lib.py"]

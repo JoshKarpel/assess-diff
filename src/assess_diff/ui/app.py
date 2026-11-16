@@ -30,6 +30,7 @@ from counterweight.handlers import first
 from counterweight.handlers import on_click
 from counterweight.handlers import page_down
 from counterweight.handlers import page_up
+from counterweight.headless import Highlight
 from counterweight.headless import use_text_input
 from counterweight.hooks import Editor
 from counterweight.hooks import use_effect
@@ -102,7 +103,6 @@ from assess_diff.ui.pills import pills
 from assess_diff.ui.review_manager import ManagerActions
 from assess_diff.ui.review_manager import review_manager
 from assess_diff.ui.theme_picker import Query
-from assess_diff.ui.theme_picker import highlighted_theme
 from assess_diff.ui.theme_picker import theme_picker
 
 # How long the watcher waits for a burst of changes to settle before the diff is recomputed.
@@ -376,7 +376,7 @@ def assess_app(
 
     mode = preferences.view_mode
     picking = session.picking_theme
-    theme = (highlighted_theme(themes(), picking.query) if picking is not None else None) or preferences.theme
+    theme = (picking.query.highlighted(themes()) if picking is not None else None) or preferences.theme
     document = use_memo(
         lambda: None if diff is None else build_document(diff, review.comments, mode),
         (diff, placements(review.comments), mode),
@@ -565,7 +565,7 @@ def assess_app(
             )
         )
         # A closed picker has nothing typed in it.
-        return Query(text="", highlighted=0) if settled.picking_theme is None else settled.picking_theme.query
+        return Query() if settled.picking_theme is None else settled.picking_theme.query
 
     def project_listing() -> Listing:
         """The store as the review manager lists it: this project's reviews, and every file that can't be read."""
@@ -708,7 +708,7 @@ def assess_app(
                 return FocusOn(handle)
             case KeyPressed(key="t"):
                 handle = session.picking_theme.handle if session.picking_theme is not None else FocusHandle()
-                opened = PickingTheme(handle, Query.at(themes(), preferences.theme))
+                opened = PickingTheme(handle, Query(highlight=Highlight(key=preferences.theme)))
                 set_session(lambda s: replace(s, picking_theme=opened))
                 return FocusOn(handle)
             case KeyPressed(key="e"):
