@@ -56,8 +56,8 @@ from assess_diff.navigation import RowAt
 from assess_diff.navigation import Scope
 from assess_diff.navigation import SummaryAt
 from assess_diff.navigation import ViewMode
+from assess_diff.navigation import after_deleting
 from assess_diff.navigation import build_document
-from assess_diff.navigation import comment_row
 from assess_diff.navigation import extended
 from assess_diff.navigation import in_view
 from assess_diff.navigation import moved
@@ -67,7 +67,7 @@ from assess_diff.navigation import placements
 from assess_diff.navigation import primary
 from assess_diff.navigation import recovered
 from assess_diff.navigation import recovered_selection
-from assess_diff.navigation import row_lines
+from assess_diff.navigation import selected_lines
 from assess_diff.navigation import selection_span
 from assess_diff.preferences import Preferences
 from assess_diff.preferences import PreferencesFile
@@ -417,7 +417,7 @@ def assess_app(
             number = editing[0]
             comment = open_review.review.comment(number)
             if comment is not None and not comment.body.strip():
-                set_session(lambda s: replace(s, cursor=comment_row(document, number)))
+                set_session(lambda s: replace(s, cursor=after_deleting(document, number, review.comments)))
                 update_review(lambda r: delete_comment(r, number))
         return FocusOn(diff_focus), ScrollIntoView(cursor_element, block="nearest")
 
@@ -455,7 +455,7 @@ def assess_app(
         layout = document.layout_of(row)
         started = selection or row
         side = primary(layout.rows[started.index]).side
-        lines = tuple(line for row in layout.rows[first_row : last_row + 1] for line in row_lines(row))
+        lines = selected_lines(layout, first_row, last_row)
         anchor, excerpt = anchor_for(layout.file, lines, side, document.diff.base.commit)
         number = open_review.review.next_number
         update_review(lambda r: add_comment(r, anchor, excerpt, open_review.now()))
@@ -526,7 +526,11 @@ def assess_app(
             case KeyPressed(key="d") if isinstance(cursor, CommentAt):
                 number = cursor.number
                 if confirming == number:
-                    set_session(lambda s: replace(s, cursor=comment_row(document, number), confirming_delete=None))
+                    set_session(
+                        lambda s: replace(
+                            s, cursor=after_deleting(document, number, review.comments), confirming_delete=None
+                        )
+                    )
                     update_review(lambda r: delete_comment(r, number))
                 else:
                     set_session(lambda s: replace(s, confirming_delete=number))

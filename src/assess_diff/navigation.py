@@ -20,6 +20,7 @@ from typing import assert_never
 from assess_diff.diff import Diff
 from assess_diff.diff import FileDiff
 from assess_diff.diff import Line
+from assess_diff.diff import LineKind
 from assess_diff.diff import SplitRow
 from assess_diff.diff import split_rows
 from assess_diff.review import Anchor
@@ -346,6 +347,20 @@ def extended(document: Document, cursor: RowAt, delta: int) -> RowAt:
     return RowAt(cursor.path, max(0, min(cursor.index + delta, len(layout.rows) - 1)))
 
 
+def selected_lines(layout: FileLayout, first: int, last: int) -> tuple[Line, ...]:
+    """
+    The lines rows `first` through `last` of `layout` are about, in the unified view's order: the ones they show,
+    and the unchanged ones hidden in a gap between them, which a comment on the selection's range is on too.
+    Leaving the hidden ones out would leave them out of its excerpt, so it would read as outdated from the start.
+    """
+    shown = {line for row in layout.rows[first : last + 1] for line in row_lines(row)}
+    spans = [index for index, line in enumerate(layout.file.lines) if line in shown]
+    # Only unchanged lines are ever hidden; a changed line in the span that isn't shown is a split row's unselected half.
+    return tuple(
+        line for line in layout.file.lines[spans[0] : spans[-1] + 1] if line in shown or line.kind is LineKind.CONTEXT
+    )
+
+
 def selection_span(cursor: RowAt, anchor: RowAt | None) -> tuple[int, int]:
     """The first and last row indexes selected from `anchor` (if it's in the cursor's file) to `cursor`."""
     start = anchor if anchor is not None and anchor.path == cursor.path else cursor
@@ -422,3 +437,14 @@ def comment_row(document: Document | None, number: int) -> Position:
             if number in numbers:
                 return RowAt(layout.file.path, index) if index >= 0 else HeaderAt(layout.file.path)
     return SummaryAt()
+
+
+def after_deleting(document: Document | None, number: int, comments: tuple[Comment, ...]) -> Position:
+    """
+    Where the cursor goes when comment `number` (one of `comments`) goes away: on the line it was drawn after,
+    in the document laid out without it, since the rows it kept in view fold away and the rest move up.
+    """
+    if document is None:
+        return SummaryAt()
+    remaining = tuple(comment for comment in comments if comment.number != number)
+    return in_view(document, comment_row(document, number), remaining, document.mode, document.scope)

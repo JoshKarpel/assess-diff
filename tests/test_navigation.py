@@ -14,6 +14,7 @@ from assess_diff.navigation import RowAt
 from assess_diff.navigation import Scope
 from assess_diff.navigation import SummaryAt
 from assess_diff.navigation import ViewMode
+from assess_diff.navigation import after_deleting
 from assess_diff.navigation import build_document
 from assess_diff.navigation import comment_row
 from assess_diff.navigation import converted
@@ -29,6 +30,7 @@ from assess_diff.navigation import primary
 from assess_diff.navigation import recovered
 from assess_diff.navigation import recovered_selection
 from assess_diff.navigation import row_lines
+from assess_diff.navigation import selected_lines
 from assess_diff.navigation import selection_span
 from tests.builders import added
 from tests.builders import comment
@@ -516,3 +518,29 @@ def test_in_view_hides_rows_in_the_scope_it_switches_to() -> None:
     whole = build_document(TWO_HUNKS, (), ViewMode.UNIFIED, Scope.WHOLE)
 
     assert in_view(whole, RowAt("long.py", 0), (), ViewMode.UNIFIED, Scope.CONTEXT) == RowAt("long.py", 0)
+
+
+def test_selected_lines_across_a_gap_take_the_lines_it_hides() -> None:
+    (layout,) = build_document(TWO_HUNKS, (), ViewMode.UNIFIED, Scope.CONTEXT).files
+
+    # Rows 6 and 7 are lines 9 and 13, either side of the gap.
+    assert [line.number for line in selected_lines(layout, 6, 7)] == [9, 10, 11, 12, 13]
+
+
+def test_selected_lines_of_part_of_a_split_hunk_leave_out_the_rest_of_it() -> None:
+    file = modified("app.py", removed(1, "a"), removed(2, "b"), added(1, "A"), added(2, "B"))
+    (layout,) = build_document(diff_of(file), (), ViewMode.SPLIT, Scope.WHOLE).files
+
+    assert selected_lines(layout, 0, 0) == (removed(1, "a"), added(1, "A"))
+
+
+def test_after_deleting_without_a_document_goes_to_the_summary() -> None:
+    assert after_deleting(None, 1, ()) == SummaryAt()
+
+
+def test_after_deleting_a_comment_keeping_hidden_lines_in_view_goes_to_the_nearest_line_left() -> None:
+    on_ten = comment(1, "long.py", 10, 10, ((LineKind.CONTEXT, "line 10"),))
+    document = build_document(TWO_HUNKS, (on_ten,), ViewMode.UNIFIED, Scope.CONTEXT)
+
+    # Line 10 is row 7 while the comment keeps it, and hidden without it, nearest line 9, row 6.
+    assert after_deleting(document, 1, (on_ten,)) == RowAt("long.py", 6)

@@ -36,6 +36,7 @@ from assess_diff.review import NewAnchor
 from assess_diff.review import OldAnchor
 from assess_diff.review import Review
 from assess_diff.review import edit_summary
+from assess_diff.review import is_outdated
 from assess_diff.storage import Listing
 from assess_diff.storage import OpenReview
 from assess_diff.storage import ReviewStore
@@ -1053,6 +1054,36 @@ async def test_z_keeps_the_cursor_on_its_line(harness: Harness) -> None:
 
     (made,) = harness.review().comments
     assert (lines(made).side, lines(made).start) == (Side.OLD, 11)
+
+
+async def test_a_selection_across_hidden_lines_comments_on_them_too(harness: Harness) -> None:
+    # From `return 6` (line 11) down past the 23 hidden lines to line 38.
+    await harness.run([TAB, *keys(Key.Down, "J", "J", "J", "J"), ENTER, *typed("all of it"), ESCAPE])
+
+    repository = await find_repository(harness.scratch.root)
+    diff = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "HEAD"))
+    (made,) = harness.review().comments
+    assert (lines(made).start, lines(made).end, len(made.excerpt), is_outdated(made, diff)) == (
+        11,
+        38,
+        28,
+        False,
+    )
+
+
+@pytest.mark.parametrize(
+    "goes_away",
+    [[*typed("doomed"), ESCAPE, *keys("d", "d")], [ESCAPE]],
+    ids=["deleted", "left-empty"],
+)
+async def test_a_comment_going_away_leaves_the_cursor_on_its_line_as_the_rows_it_kept_fold(
+    harness: Harness, goes_away: list[KeyPressed]
+) -> None:
+    # Line 38, three above the second hunk, whose comment keeps lines 35 to 37 in view while it lasts.
+    await harness.run([TAB, TAB, *keys(Key.Up, Key.Up, Key.Up), ENTER, *goes_away, ENTER, *typed("here"), ESCAPE])
+
+    (made,) = harness.review().comments
+    assert (lines(made).side, lines(made).start) == (Side.NEW, 38)
 
 
 async def test_a_file_whose_only_change_is_its_mode_shows_a_line_for_all_of_it(harness: Harness) -> None:
