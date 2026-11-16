@@ -33,6 +33,7 @@ from counterweight.focus import FocusHandle
 from counterweight.geometry import Region
 from counterweight.handlers import first
 from counterweight.handlers import scroll_on_wheel
+from counterweight.hooks import Editor
 from counterweight.hooks import use_effect
 from counterweight.hooks import use_focus
 from counterweight.hooks import use_memo
@@ -123,8 +124,8 @@ class Actions:
 
     press_row: Callable[[str, int, bool], InputResponse]
     press_position: Callable[[Position], InputResponse]
-    edit_comment: Callable[[int, Callable[[str], str]], None]
-    edit_summary: Callable[[Callable[[str], str]], None]
+    edit_comment: Callable[[int, Callable[[str], str]], str]
+    edit_summary: Editor[str]
     finish_editing: Callable[[], InputResponse]
 
 
@@ -145,11 +146,11 @@ def use_stable_actions(actions: Actions) -> Actions:
     def press_position(position: Position) -> InputResponse:
         return latest.current.press_position(position)
 
-    def edit_comment(number: int, edit: Callable[[str], str]) -> None:
-        latest.current.edit_comment(number, edit)
+    def edit_comment(number: int, edit: Callable[[str], str]) -> str:
+        return latest.current.edit_comment(number, edit)
 
-    def edit_summary(edit: Callable[[str], str]) -> None:
-        latest.current.edit_summary(edit)
+    def edit_summary(edit: Callable[[str], str]) -> str:
+        return latest.current.edit_summary(edit)
 
     def finish_editing() -> InputResponse:
         return latest.current.finish_editing()
@@ -202,7 +203,7 @@ def finish_on_escape(actions: Actions) -> InputHandler:
 def editor(
     title: tuple[Chunk, ...],
     value: str,
-    edit: Callable[[Callable[[str], str]], None],
+    edit: Editor[str],
     handle: FocusHandle,
     actions: Actions,
     style: Style,

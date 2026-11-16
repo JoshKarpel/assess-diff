@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -76,13 +77,13 @@ FINISHED = FocusOn(FocusHandle())
 ACTIONS = Actions(
     press_row=lambda path, index, extend: None,
     press_position=lambda position: None,
-    edit_comment=lambda number, edit: None,
-    edit_summary=lambda edit: None,
+    edit_comment=lambda number, edit: "",
+    edit_summary=lambda edit: "",
     finish_editing=lambda: FINISHED,
 )
 BOX = Region(left=4, top=9, right=30, bottom=14)
 RECEIVER = Receiver(
-    rects=Rects(content=BOX, padding=BOX, border=BOX, margin=BOX, clip=BOX, visible=BOX),
+    rects=Rects(content=BOX, padding=BOX, border=BOX, margin=BOX, clip=BOX, visible=BOX, screen=BOX),
     is_target=False,
     focus_handle=None,
     is_focused=False,
@@ -137,7 +138,7 @@ def test_runs_cut_after_a_row_with_comments_after_it() -> None:
     assert runs(11, frozenset({3}), None, None) == (Run(0, 4, NONE), Run(4, 11, NONE))
 
 
-def edit_nothing(edit: object) -> None:
+def edit_nothing(edit: Callable[[str], str]) -> str:  # type: ignore[empty-body]  # never called
     """An editor's `edit`, which these tests compare by identity rather than call."""
 
 

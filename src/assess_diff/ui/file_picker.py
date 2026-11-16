@@ -32,6 +32,7 @@ from counterweight.handlers import focus_receiver_on_press
 from counterweight.handlers import on_click
 from counterweight.handlers import scroll_on_wheel
 from counterweight.headless import use_text_input
+from counterweight.hooks import Editor
 from counterweight.hooks import use_effect
 from counterweight.hooks import use_focus
 from counterweight.hooks import use_memo
@@ -275,8 +276,10 @@ def file_picker(
             on_input=on_click(partial(press, index, row)),
         )
 
-    def set_query(edit: Callable[[Query], Query]) -> None:
-        set_filtering(lambda f: f if f is None else replace(f, query=edit(f.query)))
+    def set_query(edit: Callable[[Query], Query]) -> Query:
+        settled = set_filtering(lambda f: f if f is None else replace(f, query=edit(f.query)))
+        # A closed filter has nothing typed in it.
+        return Query(text="", highlighted=0) if settled is None else settled.query
 
     return Div(
         style=col
@@ -317,8 +320,8 @@ def filter_list(
     paths: tuple[str, ...],
     comment_counts: tuple[int, ...],
     filtering: Filtering,
-    set_query: Callable[[Callable[[Query], Query]], None],
-    dismiss: Callable[[], None],
+    set_query: Editor[Query],
+    dismiss: Callable[[], object],
     back: Callable[[], InputResponse],
     jump: Callable[[HeaderAt | SummaryAt], InputResponse],
 ) -> Div:
@@ -331,8 +334,8 @@ def filter_list(
     has_been_focused = use_ref(False)
     query = filtering.query
 
-    def edit(edit_text: Callable[[str], str]) -> None:
-        set_query(lambda q: q.edited(edit_text(q.text)))
+    def edit(edit_text: Callable[[str], str]) -> str:
+        return set_query(lambda q: q.edited(edit_text(q.text))).text
 
     field = use_text_input(query.text, edit, handle=filtering.handle)
     shown = matches(query.text, paths)
@@ -399,7 +402,7 @@ def filter_list(
 
 
 @component
-def run_on_mount(action: Callable[[], None]) -> Div:
+def run_on_mount(action: Callable[[], object]) -> Div:
     """
     Nothing on screen: runs `action` once, after the render that mounts it,
     so a parent can act on something only its render sees, such as having lost focus, by showing this.

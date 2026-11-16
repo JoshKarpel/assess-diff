@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import sys
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -52,6 +53,9 @@ async def test_c_copies_the_review_as_markdown(scratch: Scratch, terminal: Termi
             (),
         ),
         output_stream=output,
+        # As the harness passes them: counterweight's defaults are the streams in place at its import.
+        stdout=sys.stdout,
+        stderr=sys.stderr,
         clipboard_handler=copies.append,
         input_stream=terminal.stream,
         dimensions=(80, 20),
