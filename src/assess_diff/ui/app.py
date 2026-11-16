@@ -31,6 +31,7 @@ from counterweight.handlers import on_click
 from counterweight.handlers import page_down
 from counterweight.handlers import page_up
 from counterweight.headless import use_text_input
+from counterweight.hooks import Editor
 from counterweight.hooks import use_effect
 from counterweight.hooks import use_memo
 from counterweight.hooks import use_state
@@ -201,7 +202,7 @@ NAME_STYLE = text_bold | text_color("amber", 300)
 @component
 def name_field(
     naming: Naming,
-    set_name: Callable[[Callable[[str], str]], None],
+    set_name: Editor[str],
     rename: Callable[[str], InputResponse],
     cancel: Callable[[], InputResponse],
 ) -> Text:
@@ -377,10 +378,15 @@ def assess_app(
     cursor = SummaryAt() if document is None else recovered(document, session.cursor)
     selection = None if document is None else recovered_selection(document, cursor, session.selection)
 
-    def update_review(edit: Callable[[Review], Review]) -> None:
+    def update_review(edit: Callable[[Review], Review]) -> Review:
         if (saved_notice := open_review.update(edit)) is not None:
             set_notice(saved_notice)
-        set_review(open_review.review)
+        return set_review(open_review.review)
+
+    def edit_comment_body(number: int, edit: Callable[[str], str]) -> str:
+        """Edit comment `number`'s body, returning it as it settled, or nothing typed once the comment's gone."""
+        comment = update_review(lambda r: edit_comment(r, number, edit)).comment(number)
+        return "" if comment is None else comment.body
 
     def start_editing(number: int | None) -> InputResponse:
         """Edit comment `number` where it's drawn, or with `None`, the summary in its dialog, leaving the cursor be."""
@@ -431,8 +437,8 @@ def assess_app(
         Actions(
             press_row=press_row,
             press_position=press_position,
-            edit_comment=lambda number, edit: update_review(lambda r: edit_comment(r, number, edit)),
-            edit_summary=lambda edit: update_review(lambda r: edit_summary(r, edit)),
+            edit_comment=edit_comment_body,
+            edit_summary=lambda edit: update_review(lambda r: edit_summary(r, edit)).summary,
             finish_editing=finish_editing,
         )
     )
@@ -538,14 +544,16 @@ def assess_app(
         set_session(lambda s: replace(s, picking_theme=None))
         return FocusOn(diff_focus)
 
-    def set_query(edit: Callable[[Query], Query]) -> None:
-        set_session(
+    def set_query(edit: Callable[[Query], Query]) -> Query:
+        settled = set_session(
             lambda s: (
                 s
                 if s.picking_theme is None
                 else replace(s, picking_theme=replace(s.picking_theme, query=edit(s.picking_theme.query)))
             )
         )
+        # A closed picker has nothing typed in it.
+        return Query(text="", highlighted=0) if settled.picking_theme is None else settled.picking_theme.query
 
     def project_listing() -> Listing:
         """The store as the review manager lists it: this project's reviews, and every file that can't be read."""
@@ -603,8 +611,12 @@ def assess_app(
         set_session(lambda s: replace(s, naming=naming))
         return FocusOn(naming.handle)
 
-    def set_name(edit: Callable[[str], str]) -> None:
-        set_session(lambda s: s if s.naming is None else replace(s, naming=replace(s.naming, name=edit(s.naming.name))))
+    def set_name(edit: Callable[[str], str]) -> str:
+        settled = set_session(
+            lambda s: s if s.naming is None else replace(s, naming=replace(s.naming, name=edit(s.naming.name)))
+        )
+        # A closed field has nothing typed in it.
+        return "" if settled.naming is None else settled.naming.name
 
     def finish_naming(typed: str) -> InputResponse:
         # As the review manager renames: surrounding spaces go, but a name of only spaces stays rather than vanishing.
@@ -622,10 +634,12 @@ def assess_app(
         set_session(lambda s: replace(s, jumping=jumping))
         return FocusOn(jumping.handle)
 
-    def set_jump_number(edit: Callable[[str], str]) -> None:
-        set_session(
+    def set_jump_number(edit: Callable[[str], str]) -> str:
+        settled = set_session(
             lambda s: s if s.jumping is None else replace(s, jumping=replace(s.jumping, number=edit(s.jumping.number)))
         )
+        # A closed dialog has nothing typed in it.
+        return "" if settled.jumping is None else settled.jumping.number
 
     def go_to_comment(number: int) -> InputResponse:
         set_session(

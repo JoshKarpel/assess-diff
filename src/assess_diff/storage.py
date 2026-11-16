@@ -221,8 +221,12 @@ class OpenReview:
         Apply `edit` and save the result, returning a notice for the reader when the save had to go elsewhere:
         if another process changed the review's file, this one's version is saved as a new review instead,
         so neither process's comments are lost.
+        An edit that leaves the review as it was saves nothing, since counterweight's text fields read the value
+        they're editing by sending an edit that changes nothing (`get_state`), once or more per key.
         """
-        review = edit(self.review).model_copy(update={"updated": self.now()})
+        if (edited := edit(self.review)) == self.review:
+            return None
+        review = edited.model_copy(update={"updated": self.now()})
         notice = None
         try:
             stored = self.store.save(review, self.digest)
