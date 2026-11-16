@@ -86,6 +86,10 @@ WORKLOADS = (
     Workload("resize", (), (TerminalResized((WIDTH - 10, HEIGHT)), TerminalResized((WIDTH, HEIGHT))), 10),
     # From one end of the diff to the other while scrolled sideways, so the files there have the scroll to catch up on.
     Workload("jump", (RIGHT, RIGHT), (KeyPressed(key=Key.End), KeyPressed(key=Key.Home)), 10),
+    # Finding text that two lines in three hold, then nothing typed again, so each press searches the whole diff or none.
+    Workload("find", (KeyPressed(key="/"),), (KeyPressed(key="x"), KeyPressed(key=Key.Backspace)), 20),
+    # From one of those matches to the next, which the diff behind the dialog moves its cursor to.
+    Workload("find-down", (KeyPressed(key="/"), KeyPressed(key="x")), (KeyPressed(key=Key.Down),), 30),
 )
 
 
