@@ -95,6 +95,12 @@ A survivor that matches no entry is a hole until shown otherwise.
 
 ### `navigation.py`
 
+- `commented`: the slice's `max(0, first - 1)` becomes `max(1, first - 1)`,
+  so a comment none of whose lines are left never keeps row 0 as the row before them.
+  For a new-side comment, the working tree's numbers run from 1 without a gap,
+  so only line 1 can be the one new-side line before its range, with the range past the file's end;
+  the file is in the diff, so it has a change, and the rows after line 1 are a hunk, which keeps row 0 as context.
+  For an old-side comment, row 0 is a removed line's, which is always kept as a change.
 - `folded`: the context's lower bound `max(0, ...)` becomes `max(1, ...)`.
   Row 0, then left out of `near`, is a lone row between the file's start and row 1 (in `near`, or the file's end),
   which the lone-row rule keeps.
