@@ -11,7 +11,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from counterweight.headless import Highlight
+
 from assess_diff.diff import Line
+from assess_diff.diff import Side
 from assess_diff.navigation import Document
 from assess_diff.navigation import Position
 from assess_diff.navigation import RowAt
@@ -51,7 +54,19 @@ def find(document: Document, query: str) -> tuple[Match, ...]:
     )
 
 
-def highlighted(document: Document, found: tuple[Match, ...], origin: Position, chosen: int | None) -> int | None:
+type MatchKey = tuple[str, Side, int]
+
+
+def match_key(match: Match) -> MatchKey:
+    """
+    What keeps a chosen match chosen while the diff changes under the dialog: its file and its line, by side and number,
+    so matches coming and going before it don't move the highlight onto another line.
+    A line's new number shifts when lines above it are added or removed, and the highlight then stays at its index.
+    """
+    return match.at.path, match.line.side, match.line.number
+
+
+def highlighted(document: Document, found: tuple[Match, ...], origin: Position, chosen: Highlight | None) -> int | None:
     """
     Which of `found` the dialog highlights, and the diff previews: the one `chosen` with ↑↓,
     or until one is, the first at or after `origin`, where the cursor was, wrapping to the first;
@@ -60,6 +75,6 @@ def highlighted(document: Document, found: tuple[Match, ...], origin: Position, 
     if not found:
         return None
     if chosen is not None:
-        return min(chosen, len(found) - 1)
+        return chosen.index_in(found, match_key)
     at = document.indexes[origin]
     return next((index for index, match in enumerate(found) if document.indexes[match.at] >= at), 0)

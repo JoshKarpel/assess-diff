@@ -30,6 +30,7 @@ from counterweight.handlers import first
 from counterweight.handlers import on_click
 from counterweight.handlers import page_down
 from counterweight.handlers import page_up
+from counterweight.headless import Highlight
 from counterweight.headless import use_text_input
 from counterweight.hooks import Editor
 from counterweight.hooks import use_effect
@@ -84,6 +85,7 @@ from assess_diff.review import rename
 from assess_diff.search import Match
 from assess_diff.search import find
 from assess_diff.search import highlighted
+from assess_diff.search import match_key
 from assess_diff.storage import Listing
 from assess_diff.storage import OpenReview
 from assess_diff.storage import Unreadable
@@ -133,19 +135,19 @@ class Session:
 class Searching:
     """
     The dialog to find text is open: its field's focus handle, and the match chosen with ↑↓,
-    or `None` until one is, which highlights the first at or after the cursor.
+    which stays on its line as the diff changes, or `None` until one is, which highlights the first at or after the cursor.
     """
 
     handle: FocusHandle
-    chosen: int | None
+    chosen: Highlight | None
 
-    def moved(self, delta: int, highlighted: int, count: int) -> Searching:
+    def moved(self, delta: int, highlighted: int, found: tuple[Match, ...]) -> Searching:
         """
-        The highlight moved `delta` matches on, of `count`, wrapping at either end,
+        The highlight moved `delta` of `found` on, wrapping at either end,
         from the one chosen, or with none chosen yet, from the `highlighted` one.
         """
-        start = highlighted if self.chosen is None else self.chosen
-        return replace(self, chosen=(start + delta) % count)
+        start = Highlight(index=highlighted) if self.chosen is None else self.chosen
+        return replace(self, chosen=start.moved(found, delta, match_key))
 
 
 @dataclass(frozen=True, slots=True)
@@ -723,9 +725,9 @@ def assess_app(
     def move_search(delta: int) -> None:
         if shown_match is None:
             return
-        count, start = len(found), shown_match
+        start = shown_match
         set_session(
-            lambda s: s if s.searching is None else replace(s, searching=s.searching.moved(delta, start, count))
+            lambda s: s if s.searching is None else replace(s, searching=s.searching.moved(delta, start, found))
         )
 
     def go_to_match(match: Match) -> InputResponse:

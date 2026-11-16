@@ -15,6 +15,7 @@ from counterweight.events import MouseScrolledDown
 from counterweight.events import MouseScrolledUp
 from counterweight.focus import FocusHandle
 from counterweight.geometry import Position
+from counterweight.headless import Highlight
 from counterweight.keys import Key
 from counterweight.styles.utilities import text_bg
 from counterweight.styles.utilities import text_bold
@@ -28,6 +29,7 @@ from assess_diff.export import to_markdown
 from assess_diff.git import compute_diff
 from assess_diff.git import find_repository
 from assess_diff.git import resolve_base
+from assess_diff.navigation import RowAt
 from assess_diff.navigation import ViewMode
 from assess_diff.navigation import build_document
 from assess_diff.preferences import PreferencesFile
@@ -38,6 +40,8 @@ from assess_diff.review import NewAnchor
 from assess_diff.review import OldAnchor
 from assess_diff.review import Review
 from assess_diff.review import edit_summary
+from assess_diff.search import Match
+from assess_diff.search import match_key
 from assess_diff.storage import Listing
 from assess_diff.storage import OpenReview
 from assess_diff.storage import ReviewStore
@@ -285,6 +289,9 @@ async def test_find_text_moves_the_highlight_to_another_match(harness: Harness, 
     assert lines(harness.review().comments[0]).start == 20
 
 
+TEN_FOUND = tuple(Match(at=RowAt("app.py", n), line=added(n + 1, "x"), start=0, stop=1) for n in range(10))
+
+
 @pytest.mark.parametrize(
     ("chosen", "delta", "expected"),
     [(None, 1, 4), (None, -1, 2), (6, 1, 7), (6, -1, 5), (9, 1, 0), (0, -1, 9)],
@@ -293,7 +300,36 @@ async def test_find_text_moves_the_highlight_to_another_match(harness: Harness, 
 def test_searching_moves_the_highlight_from_the_one_chosen_or_else_the_highlighted_one(
     chosen: int | None, delta: int, expected: int
 ) -> None:
-    assert Searching(HANDLE, chosen).moved(delta, 3, 10) == Searching(HANDLE, expected)
+    searching = Searching(HANDLE, None if chosen is None else Highlight(index=chosen))
+
+    assert searching.moved(delta, 3, TEN_FOUND) == Searching(
+        HANDLE, Highlight(key=match_key(TEN_FOUND[expected]), index=expected)
+    )
+
+
+async def test_find_text_keeps_the_highlight_on_its_line_as_a_match_appears_before_it(harness: Harness) -> None:
+    def write_later(_: object) -> bool:
+        """Changes `return 1` to `return 6` too, on line 5, before both the matches, the same each time it's asked."""
+        harness.scratch.write("app.py", functions({1: 6, 3: 6, 13: 26}))
+        return True
+
+    write = WaitFor(write_later, timeout=timedelta(seconds=10))
+
+    # `return 6` is on line 11, as changed, and on line 20, as it was; Down chooses line 20.
+    await harness.run(
+        [
+            *keys("/"),
+            *typed("return 6"),
+            KeyPressed(key=Key.Down),
+            write,
+            showing("of 3 lines"),
+            harness.shot(),
+            *(ENTER, ENTER, *typed("!"), ESCAPE),
+        ]
+    )
+
+    assert "3 of 3 lines" in harness.frames[0]
+    assert lines(harness.review().comments[0]).start == 20
 
 
 async def test_find_text_reopens_with_the_last_text_from_the_match_the_cursor_is_on(harness: Harness) -> None:

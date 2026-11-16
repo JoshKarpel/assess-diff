@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from counterweight.headless import Highlight
 
 from assess_diff.navigation import CommentAt
 from assess_diff.navigation import HeaderAt
@@ -12,6 +13,7 @@ from assess_diff.navigation import build_document
 from assess_diff.search import Match
 from assess_diff.search import find
 from assess_diff.search import highlighted
+from assess_diff.search import match_key
 from tests.builders import added
 from tests.builders import comment
 from tests.builders import context
@@ -113,9 +115,24 @@ def test_highlighted_counts_from_a_comment_where_it_is_drawn() -> None:
 
 @pytest.mark.parametrize(("chosen", "expected"), [(1, 1), (2, 2), (5, 2)], ids=["chosen", "last", "past-the-end"])
 def test_highlighted_is_the_one_chosen_within_those_found(chosen: int, expected: int) -> None:
-    assert highlighted(UNIFIED, FOUND, RowAt("caller.py", 1), chosen) == expected
+    assert highlighted(UNIFIED, FOUND, RowAt("caller.py", 1), Highlight(index=chosen)) == expected
 
 
-@pytest.mark.parametrize("chosen", [None, 3])
-def test_highlighted_is_none_when_nothing_is_found(chosen: int | None) -> None:
+def test_highlighted_stays_on_the_line_chosen_as_a_match_appears_before_it() -> None:
+    chosen = Highlight(key=match_key(FOUND[1]), index=1)
+    document = build_document(diff_of(modified("aaa.py", added(1, "compute()")), APP, CALLER), (), ViewMode.UNIFIED)
+
+    # The new file's match comes first, so the line chosen, the second found before, is now the third.
+    assert highlighted(document, find(document, "compute"), SummaryAt(), chosen) == 2
+
+
+def test_match_key_tells_apart_the_lines_of_a_split_row() -> None:
+    split = build_document(diff_of(APP), (), ViewMode.SPLIT)
+    old, new = find(split, "compute_")
+
+    assert match_key(old) != match_key(new)
+
+
+@pytest.mark.parametrize("chosen", [None, Highlight(index=3)])
+def test_highlighted_is_none_when_nothing_is_found(chosen: Highlight | None) -> None:
     assert highlighted(UNIFIED, (), SummaryAt(), chosen) is None
