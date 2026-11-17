@@ -45,6 +45,7 @@ Tab and Shift+Tab jump between hunks and comments, and `n` and `N` between comme
 `/` finds text in the diff, such as a name: it lists the lines holding what you type, from where the cursor is,
 and the diff behind it shows each as you choose it, going there on Enter and back where it was on Escape.
 It ignores case unless what you type has a capital letter, and `/` again returns to what you typed last.
+It finds only the lines shown, so to find text in the unchanged lines hidden between hunks, `z` to show whole files first.
 Left and Right (or `h` and `l`, a sideways swipe, or Shift and the wheel) scroll long lines sideways,
 keeping the line numbers in place, and `0` scrolls back to the start.
 The file picker on the left (`f`) jumps to a file, or to the summary from its entry at the top,

@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+### Added
+
+- **`/` finds text in the diff**, such as a name.
+  It lists the lines shown that hold what's typed, starting from the cursor,
+  and the diff behind it shows whichever match is highlighted:
+  Enter goes there, and Escape puts the cursor back where it was.
+  It ignores case unless what's typed has a capital letter,
+  and `/` again returns to what was typed last.
 
 ### Changed
 
@@ -19,12 +28,10 @@
   where it used to show the whole file.
   Lines a comment is on stay in view with their context.
   `z` switches to whole files and back, and the choice is kept as a preference.
-- **Preferences are saved as version 2**, which records that choice.
-  A preferences file 0.1.0 saved loads as before,
-  and once this version saves it, 0.1.0 stops at startup on it.
-- **Reviews are saved as version 2**, which records the chosen base.
-  A review 0.1.0 saved opens as before,
-  and once this version saves it, 0.1.0 lists it among the files it can't read.
+- **Reviews and preferences are saved as version 2**:
+  a review records its chosen base, and preferences record whether to show hunks or whole files.
+  Files 0.1.0 saved load as before, but once 0.2.0 saves them, 0.1.0 can't read them:
+  it lists such a review among the files it can't read, and stops at startup on such a preferences file.
 - A comment's number, and whether it's outdated,
   are drawn in the top border of its box rather than on a line of their own.
 - The theme picker and the file filter list the option the typed text names exactly first.
