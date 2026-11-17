@@ -5,7 +5,7 @@
 ### Added
 
 - **`/` finds text in the diff**, such as a name.
-  It lists the lines holding what's typed, starting from the cursor,
+  It lists the lines shown that hold what's typed, starting from the cursor,
   and the diff behind it shows whichever match is highlighted:
   Enter goes there, and Escape puts the cursor back where it was.
   It ignores case unless what's typed has a capital letter,
