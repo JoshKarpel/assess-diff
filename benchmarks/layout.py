@@ -24,7 +24,6 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 
-from assess_diff.diff import BaseMode
 from assess_diff.diff import Diff
 from assess_diff.diff import LineKind
 from assess_diff.diff import Side
@@ -34,6 +33,7 @@ from assess_diff.git import resolve_base
 from assess_diff.navigation import Scope
 from assess_diff.navigation import ViewMode
 from assess_diff.navigation import build_document
+from assess_diff.review import FOLLOW_HEAD
 from assess_diff.review import Comment
 from assess_diff.review import anchor_for
 from benchmarks.keys import SIZES
@@ -83,7 +83,7 @@ def spread_comments(diff: Diff, per_file: int) -> tuple[Comment, ...]:
 
 async def load_diff(root: Path) -> Diff:
     repository = await find_repository(root)
-    return await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))
+    return await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))
 
 
 def layout_times(diff: Diff, case: Case) -> list[float]:

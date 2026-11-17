@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "0199aaaa-review",
+  "name": "2026-03-14 15:09",
+  "project": "/work/repo/.git",
+  "worktree": "/work/repo",
+  "branch": "feature/x",
+  "base_mode": "head",
+  "created": "2026-03-14T15:09:26Z",
+  "updated": "2026-03-14T15:09:26Z",
+  "summary": "Looks close.",
+  "comments": [
+    {
+      "number": 1,
+      "anchor": {
+        "path": "src/app.py",
+        "side": "new",
+        "start": 2,
+        "end": 3,
+        "base_commit": null
+      },
+      "excerpt": [
+        {
+          "kind": "added",
+          "text": "    return 1"
+        },
+        {
+          "kind": "context",
+          "text": "    pass"
+        }
+      ],
+      "body": "why one?",
+      "created": "2026-03-14T15:09:26Z"
+    },
+    {
+      "number": 2,
+      "anchor": {
+        "path": "src/app.py",
+        "side": "old",
+        "start": 4,
+        "end": 4,
+        "base_commit": "c0ffee0123456789c0ffee0123456789c0ffee01"
+      },
+      "excerpt": [
+        {
+          "kind": "removed",
+          "text": "    return None"
+        }
+      ],
+      "body": "kept?",
+      "created": "2026-03-14T15:09:26Z"
+    },
+    {
+      "number": 3,
+      "anchor": {
+        "path": "src/views.py",
+        "side": null
+      },
+      "excerpt": [],
+      "body": "split this up",
+      "created": "2026-03-14T15:09:26Z"
+    }
+  ],
+  "next_number": 4
+}

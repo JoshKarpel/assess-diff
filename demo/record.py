@@ -38,11 +38,11 @@ from counterweight.controls import Quit
 from counterweight.events import KeyPressed
 from counterweight.keys import Key
 
-from assess_diff.diff import BaseMode
 from assess_diff.git import compute_diff
 from assess_diff.git import find_repository
 from assess_diff.git import resolve_base
 from assess_diff.preferences import PreferencesFile
+from assess_diff.review import FOLLOW_HEAD
 from assess_diff.review import Review
 from assess_diff.review import rename
 from assess_diff.storage import OpenReview
@@ -220,9 +220,9 @@ async def record(cast: Path) -> None:
     with tempfile.TemporaryDirectory() as directory:
         scratch = build_repository(Path(directory) / "weather")
         repository = await find_repository(scratch.root)
-        diff = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "HEAD"))
+        diff = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "HEAD"))
         started = Review.start(
-            "demo", repository.common_dir, repository.worktree, repository.branch, BaseMode.HEAD, CLOCK
+            "demo", repository.common_dir, repository.worktree, repository.branch, FOLLOW_HEAD, CLOCK
         )
         open_review = OpenReview(
             ReviewStore(Path(directory) / "reviews"),

@@ -66,12 +66,6 @@ Mutant numbers change with every source edit,
 so each entry names the function and the change instead.
 A survivor that matches no entry is a hole until shown otherwise.
 
-### `cli.py`
-
-- `current_diff`: the `"HEAD"` in `target or "HEAD"` respelled (`"XXHEADXX"`, `"head"`).
-  It's passed only when `target` is `None`, which makes the mode `BaseMode.HEAD`,
-  and `resolve_base` resolves `HEAD` without reading its target.
-
 ### `diff.py`
 
 - `header_path`: the quoted-path scan starts at `end = 2` instead of `1`.

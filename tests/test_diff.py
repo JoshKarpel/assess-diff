@@ -29,13 +29,14 @@ from assess_diff.diff import untracked_placeholder
 from assess_diff.git import compute_diff
 from assess_diff.git import find_repository
 from assess_diff.git import resolve_base
+from assess_diff.review import FOLLOW_HEAD
 from tests.conftest import Scratch
 from tests.conftest import init_scratch
 
 
 async def head_diff(scratch: Scratch) -> Diff:
     repository = await find_repository(scratch.root)
-    return await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))
+    return await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))
 
 
 def old_content(lines: tuple[Line, ...]) -> list[str]:

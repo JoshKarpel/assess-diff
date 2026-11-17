@@ -11,6 +11,7 @@ from counterweight.controls import CopyToClipboard
 from counterweight.elements import Chunk
 from counterweight.events import KeyPressed
 from counterweight.focus import FocusHandle
+from counterweight.headless import Highlight
 from counterweight.keys import Key
 from counterweight.styles.utilities import text_bg
 from counterweight.styles.utilities import text_bold
@@ -29,6 +30,8 @@ from assess_diff.navigation import ViewMode
 from assess_diff.navigation import build_document
 from assess_diff.preferences import Preferences
 from assess_diff.preferences import PreferencesFile
+from assess_diff.review import FOLLOW_HEAD
+from assess_diff.review import FOLLOW_MERGE_BASE
 from assess_diff.review import Comment
 from assess_diff.review import ExcerptLine
 from assess_diff.review import FileAnchor
@@ -37,6 +40,7 @@ from assess_diff.review import OldAnchor
 from assess_diff.review import Review
 from assess_diff.review import edit_summary
 from assess_diff.review import is_outdated
+from assess_diff.review import pinned
 from assess_diff.storage import Listing
 from assess_diff.storage import OpenReview
 from assess_diff.storage import ReviewStore
@@ -49,7 +53,6 @@ from assess_diff.ui.app import PickingTheme
 from assess_diff.ui.app import Session
 from assess_diff.ui.app import copied
 from assess_diff.ui.app import key_hints
-from assess_diff.ui.app import other_base
 from assess_diff.ui.app import status_line
 from assess_diff.ui.app import unreadable_notice
 from assess_diff.ui.pills import ON_SCREEN
@@ -112,7 +115,7 @@ def lines(comment: Comment) -> NewAnchor | OldAnchor:
 
 async def test_a_diff_computed_already_is_drawn_in_the_first_frame(harness: Harness) -> None:
     repository = await find_repository(harness.scratch.root)
-    computed = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "HEAD"))
+    computed = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "HEAD"))
 
     await harness.run([harness.shot()], loaded="", initial_diff=computed)
 
@@ -328,30 +331,144 @@ async def test_s_twice_returns_to_the_unified_view(harness: Harness) -> None:
     assert harness.preferences.load().view_mode is ViewMode.UNIFIED
 
 
-async def test_b_switches_to_the_merge_base_and_remembers_it(harness: Harness) -> None:
+def branch_with_commits(harness: Harness, *subjects: str) -> list[str]:
+    """Puts `feature` off `main`, with an empty commit for each of `subjects`, and returns their hashes, oldest first."""
     harness.scratch.git("checkout", "--quiet", "-b", "feature")
+    return [harness.scratch.empty_commit(subject) for subject in subjects]
 
-    await harness.run([*keys("b"), showing("merge base"), harness.shot(), ENTER, *typed("x"), ESCAPE])
+
+async def test_b_lists_the_branch_back_to_the_merge_base_under_the_working_tree(harness: Harness) -> None:
+    first, second = branch_with_commits(harness, "first on feature", "second on feature")
+
+    await harness.run([*keys("b"), showing("merge base with main"), harness.shot()])
+
+    rows = [line for line in harness.frames[0].splitlines() if "on feature" in line or "merge base with" in line]
+    assert "working tree" in harness.frames[0]
+    assert [second[:7] in rows[0], first[:7] in rows[1], "merge base with main" in rows[2]] == [True, True, True]
+    assert ("HEAD" in rows[0], "current base" in rows[0], "● " in rows[0]) == (True, True, True)
+
+
+async def test_moving_down_the_picker_draws_the_diff_down_to_the_highlighted_commit(harness: Harness) -> None:
+    branch_with_commits(harness, "first on feature", "second on feature")
+
+    await harness.run([*keys("b"), showing("merge base with main"), *keys(Key.Down, "j"), harness.shot()])
+
+    rows = [line for line in harness.frames[0].splitlines() if "on feature" in line or "merge base with" in line]
+    assert ["│ " in rows[0], "│ " in rows[1], "● " in rows[2]] == [True, True, True]
+
+
+async def test_enter_on_the_merge_base_follows_it_and_remembers_it(harness: Harness) -> None:
+    branch_with_commits(harness, "on feature")
+
+    await harness.run(
+        [*keys("b"), showing("merge base with main"), *keys(Key.Down), ENTER, showing("merge base"), harness.shot()]
+    )
 
     assert "against main (merge base" in harness.frames[0]
-    assert harness.review().base_mode is BaseMode.MERGE_BASE
+    assert harness.review().base == FOLLOW_MERGE_BASE
 
 
-async def test_b_without_a_branch_to_merge_with_says_so(harness: Harness) -> None:
-    await harness.run([*keys("b"), harness.shot()], target=None)
+async def test_enter_on_another_commit_pins_it(harness: Harness) -> None:
+    first, _ = branch_with_commits(harness, "first on feature", "second on feature")
 
-    assert "No branch to take a merge base with; pass one with --base" in harness.frames[0]
+    await harness.run(
+        [*keys("b"), showing("merge base with main"), *keys(Key.Down), ENTER, showing("against commit"), harness.shot()]
+    )
+
+    assert f"against commit {first[:7]}" in harness.frames[0]
+    assert harness.review().base == pinned(first)
+
+
+async def test_the_picker_stops_at_either_end_and_moves_back_up(harness: Harness) -> None:
+    first, _ = branch_with_commits(harness, "first on feature", "second on feature")
+
+    await harness.run(
+        [*keys("b"), showing("merge base with main"), *keys(Key.Up, *[Key.Down] * 4), harness.shot(), *keys("k"), ENTER]
+    )
+
+    (row,) = (line for line in harness.frames[0].splitlines() if "● " in line)
+    assert "merge base with main" in row
+    assert harness.review().base == pinned(first)
+
+
+async def test_a_pinned_base_stays_put_as_head_moves(harness: Harness) -> None:
+    first, _ = branch_with_commits(harness, "first on feature", "second on feature")
+
+    def commit_more(_: object) -> bool:
+        harness.scratch.empty_commit("third on feature")
+        return True
+
+    await harness.run(
+        [
+            WaitFor(commit_more, timeout=timedelta(seconds=10)),
+            *keys("b"),
+            showing("third on feature"),
+            harness.shot(),
+        ],
+        base=pinned(first),
+    )
+
+    (row,) = (line for line in harness.frames[0].splitlines() if "current base" in line)
+    assert first[:7] in row
+
+
+async def test_clicking_a_commit_in_the_picker_picks_it(harness: Harness) -> None:
+    first, _ = branch_with_commits(harness, "first on feature", "second on feature")
+
+    await harness.run([*keys("b"), showing("first on feature"), harness.shot()])
+    row = where(harness.frames[0], "first on feature")
+
+    await harness.run([*keys("b"), showing("first on feature"), *click(row.x, row.y)])
+
+    assert harness.review().base == pinned(first)
+
+
+async def test_escape_closes_the_picker_and_keeps_the_base(harness: Harness) -> None:
+    branch_with_commits(harness, "on feature")
+
+    await harness.run([*keys("b"), showing("merge base with main"), *keys(Key.Down), ESCAPE, harness.shot()])
+
+    assert "Compare the working tree with" not in harness.frames[0]
+    assert "against HEAD" in harness.frames[0]
+
+
+async def test_tab_closes_the_picker(harness: Harness) -> None:
+    await harness.run([*keys("b"), showing("Compare the working tree with"), TAB, harness.shot()])
+
+    assert "Compare the working tree with" not in harness.frames[0]
+
+
+async def test_the_picker_without_a_branch_to_merge_with_lists_heads_history(harness: Harness) -> None:
+    earlier = harness.scratch.git("rev-parse", "HEAD").strip()
+    harness.scratch.empty_commit("later on main")
+
+    await harness.run([*keys("b"), showing("later on main"), harness.shot()], target=None)
+
+    assert "merge base with" not in harness.frames[0]
+    assert where(harness.frames[0], earlier[:7]).y == where(harness.frames[0], "later on main").y + 1
+
+
+async def test_the_picker_says_why_it_cant_read_the_history(harness: Harness) -> None:
+    await harness.run([*keys("b"), showing("failed"), harness.shot()], target="no-such-branch")
+
+    assert "git merge-base HEAD no-such-branch failed" in harness.frames[0]
+
+
+async def test_a_pinned_base_that_is_gone_says_so(harness: Harness) -> None:
+    await harness.run([showing("isn't in the repository"), harness.shot()], base=pinned("f" * 40), loaded="")
+
+    assert "The base commit fffffff isn't in the repository any more; b picks another" in harness.frames[0]
 
 
 async def test_a_notice_is_centered(harness: Harness) -> None:
-    await harness.run([*keys("b"), harness.shot()], target=None)
+    await harness.run([*keys("c"), showing("Copied"), harness.shot()])
 
-    (line,) = (line for line in harness.frames[0].splitlines() if "No branch to take" in line)
+    (line,) = (line for line in harness.frames[0].splitlines() if "Copied review" in line)
     assert abs((len(line) - len(line.lstrip())) - (len(line) - len(line.rstrip()))) <= 1
 
 
 async def test_a_git_failure_shows_as_a_notice(harness: Harness) -> None:
-    await harness.run([*keys("b"), showing("failed"), harness.shot()], target="no-such-branch")
+    await harness.run([showing("failed"), harness.shot()], target="no-such-branch", base=FOLLOW_MERGE_BASE, loaded="")
 
     assert "git merge-base HEAD no-such-branch failed" in harness.frames[0]
 
@@ -608,10 +725,12 @@ async def test_a_refresh_that_succeeds_clears_the_git_failure_and_no_other_notic
         harness.scratch.write("later.py", "appeared = True\n")
         return True
 
+    repository = await find_repository(harness.scratch.root)
+    # Drawn until the merge base fails, so there's a diff to copy.
+    against_head = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, None))
     recovered = WaitFor(lambda frame: "failed" not in screen_text(frame), timeout=timedelta(seconds=10))
     await harness.run(
         [
-            *keys("b"),
             showing("failed"),
             *keys("c"),
             showing("Copied"),
@@ -621,6 +740,9 @@ async def test_a_refresh_that_succeeds_clears_the_git_failure_and_no_other_notic
             harness.shot(),
         ],
         target="no-such-branch",
+        base=FOLLOW_MERGE_BASE,
+        initial_diff=against_head,
+        loaded="",
     )
 
     assert "git merge-base HEAD no-such-branch failed" in harness.frames[0]
@@ -745,15 +867,6 @@ def test_copying_cites_the_diff() -> None:
     assert control == CopyToClipboard(to_markdown(review(), diff_of()))
 
 
-@pytest.mark.parametrize(
-    ("mode", "other"),
-    [(BaseMode.HEAD, BaseMode.MERGE_BASE), (BaseMode.MERGE_BASE, BaseMode.HEAD)],
-    ids=["head", "merge-base"],
-)
-def test_other_base_switches_between_the_two_bases(mode: BaseMode, other: BaseMode) -> None:
-    assert other_base(mode) is other
-
-
 def status_groups(branch: str, against: str, *counts: tuple[Chunk, ...]) -> tuple[tuple[Chunk, ...], ...]:
     return (
         (Chunk(content=branch, style=text_bold),),
@@ -815,8 +928,20 @@ CHANGED_FILES = (
                 quiet("unified"),
             ),
         ),
+        (
+            review(branch="feature/x"),
+            diff_of(mode=BaseMode.COMMIT, label="c0ffee0"),
+            ViewMode.UNIFIED,
+            status_groups(
+                "feature/x",
+                "against commit c0ffee0",
+                files_group("0 files", " +0", " -0"),
+                quiet("0 comments"),
+                quiet("unified"),
+            ),
+        ),
     ],
-    ids=["loading-detached", "head", "merge-base"],
+    ids=["loading-detached", "head", "merge-base", "commit"],
 )
 def test_status_line_says_the_branch_the_base_and_the_counts(
     reviewed: Review, diff: Diff | None, mode: ViewMode, expected: tuple[tuple[Chunk, ...], ...]
@@ -898,8 +1023,14 @@ def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
             ("↑↓ choose", "enter open", "e rename", "dd delete", "esc close"),
         ),
         (
-            replace(INITIAL_SESSION, picking_theme=PickingTheme(HANDLE, Query(text="mono", highlighted=2))),
+            replace(
+                INITIAL_SESSION, picking_theme=PickingTheme(HANDLE, Query(text="mono", highlight=Highlight(index=2)))
+            ),
             ("type to filter", "↑↓ preview", "enter keep", "esc revert"),
+        ),
+        (
+            replace(INITIAL_SESSION, picking_base=HANDLE, editing=(3, HANDLE)),
+            ("↑↓ choose", "enter compare with it", "esc close"),
         ),
         (
             replace(INITIAL_SESSION, editing=(3, HANDLE)),
@@ -910,7 +1041,7 @@ def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
             ("press d again to delete #7", "anything else to keep it"),
         ),
     ],
-    ids=["naming", "jumping", "managing", "picking-theme", "editing", "confirming-delete"],
+    ids=["naming", "jumping", "managing", "picking-theme", "picking-base", "editing", "confirming-delete"],
 )
 def test_key_hints_list_the_keys_of_what_has_focus_even_folded(session: Session, hints: tuple[str, ...]) -> None:
     assert key_hints(session, Scope.CONTEXT, False) == hints
@@ -1071,7 +1202,7 @@ async def test_a_selection_across_hidden_lines_comments_on_them_too(harness: Har
     await harness.run([TAB, *keys(Key.Down, "J", "J", "J", "J"), ENTER, *typed("all of it"), ESCAPE])
 
     repository = await find_repository(harness.scratch.root)
-    diff = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "HEAD"))
+    diff = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "HEAD"))
     (made,) = harness.review().comments
     assert (lines(made).start, lines(made).end, len(made.excerpt), is_outdated(made, diff)) == (
         11,
