@@ -30,9 +30,13 @@ from assess_diff.git import compute_diff
 from assess_diff.git import find_repository
 from assess_diff.git import resolve_base
 from assess_diff.navigation import RowAt
+from assess_diff.navigation import Scope
 from assess_diff.navigation import ViewMode
 from assess_diff.navigation import build_document
+from assess_diff.preferences import Preferences
 from assess_diff.preferences import PreferencesFile
+from assess_diff.review import FOLLOW_HEAD
+from assess_diff.review import FOLLOW_MERGE_BASE
 from assess_diff.review import Comment
 from assess_diff.review import ExcerptLine
 from assess_diff.review import FileAnchor
@@ -40,6 +44,8 @@ from assess_diff.review import NewAnchor
 from assess_diff.review import OldAnchor
 from assess_diff.review import Review
 from assess_diff.review import edit_summary
+from assess_diff.review import is_outdated
+from assess_diff.review import pinned
 from assess_diff.search import Match
 from assess_diff.search import match_key
 from assess_diff.storage import Listing
@@ -55,7 +61,6 @@ from assess_diff.ui.app import Searching
 from assess_diff.ui.app import Session
 from assess_diff.ui.app import copied
 from assess_diff.ui.app import key_hints
-from assess_diff.ui.app import other_base
 from assess_diff.ui.app import status_line
 from assess_diff.ui.app import unreadable_notice
 from assess_diff.ui.pills import ON_SCREEN
@@ -103,6 +108,13 @@ def harness(scratch: Scratch, tmp_path: Path) -> Harness:
     )
 
 
+@pytest.fixture
+def whole_harness(harness: Harness) -> Harness:
+    """`harness` showing whole files, for tests that need more rows than the hunks and their context take."""
+    harness.preferences.save(Preferences.defaults().model_copy(update={"scope": Scope.WHOLE}))
+    return harness
+
+
 def lines(comment: Comment) -> NewAnchor | OldAnchor:
     """The anchor of a comment on lines, as every comment made with Enter on a row is."""
     assert isinstance(comment.anchor, NewAnchor | OldAnchor)
@@ -111,7 +123,7 @@ def lines(comment: Comment) -> NewAnchor | OldAnchor:
 
 async def test_a_diff_computed_already_is_drawn_in_the_first_frame(harness: Harness) -> None:
     repository = await find_repository(harness.scratch.root)
-    computed = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "HEAD"))
+    computed = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "HEAD"))
 
     await harness.run([harness.shot()], loaded="", initial_diff=computed)
 
@@ -196,8 +208,10 @@ async def test_go_to_comment_previews_the_comment_the_number_names(harness: Harn
 
     assert "Type a comment's number" in harness.frames[0]
     assert "#2 app.py, removed line 41" in harness.frames[1]
-    assert "two" in harness.frames[1].split("#2 app.py, removed line 41")[1]
-    assert "more" not in harness.frames[1].split("#2 app.py, removed line 41")[1]
+    # From the preview's title to the dialog's bottom border, since the comment itself shows in the diff below.
+    preview = harness.frames[1].split("#2 app.py, removed line 41")[1].split("╰")[0]
+    assert "two" in preview
+    assert "more" not in preview
 
 
 async def test_go_to_comment_says_when_no_comment_has_the_number_and_enter_stays(harness: Harness) -> None:
@@ -232,7 +246,7 @@ async def test_clicking_the_previewed_comment_goes_to_it(harness: Harness) -> No
 
 async def test_hash_with_go_to_comment_left_open_carries_on_with_what_was_typed(harness: Harness) -> None:
     await harness.run([*TWO_COMMENTS, harness.shot()])
-    row = where(harness.frames[0], "def f0():")
+    row = where(harness.frames[0], "def f3():")
 
     await harness.run([*keys("#"), *typed("1"), *click(row.x, row.y), *keys("#"), ENTER, ENTER, *typed("!"), ESCAPE])
 
@@ -247,7 +261,8 @@ async def test_slash_then_text_and_enter_goes_to_the_line_holding_it(harness: Ha
     assert (lines(made).side, lines(made).start, made.body) == (Side.NEW, 41, "why?")
 
 
-async def test_find_text_lists_the_lines_holding_it_and_previews_the_first_in_the_diff(harness: Harness) -> None:
+async def test_find_text_lists_the_lines_holding_it_and_previews_the_first_in_the_diff(whole_harness: Harness) -> None:
+    harness = whole_harness
     await harness.run([*keys("/"), harness.shot(), *typed("return 26"), harness.shot()])
 
     assert "Type text to find, such as a name" in harness.frames[0]
@@ -281,7 +296,8 @@ async def test_find_text_says_when_no_line_holds_it_and_enter_stays(harness: Har
     ],
     ids=["down", "up-wraps", "wheel-down", "wheel-up-wraps"],
 )
-async def test_find_text_moves_the_highlight_to_another_match(harness: Harness, choose: list[InputEvent]) -> None:
+async def test_find_text_moves_the_highlight_to_another_match(whole_harness: Harness, choose: list[InputEvent]) -> None:
+    harness = whole_harness
     # `return 6` is on line 11, as changed, and on line 20, as it was.
     await harness.run([*keys("/"), *typed("return 6"), *choose, harness.shot(), ENTER, ENTER, *typed("!"), ESCAPE])
 
@@ -307,7 +323,9 @@ def test_searching_moves_the_highlight_from_the_one_chosen_or_else_the_highlight
     )
 
 
-async def test_find_text_keeps_the_highlight_on_its_line_as_a_match_appears_before_it(harness: Harness) -> None:
+async def test_find_text_keeps_the_highlight_on_its_line_as_a_match_appears_before_it(whole_harness: Harness) -> None:
+    harness = whole_harness
+
     def write_later(_: object) -> bool:
         """Changes `return 1` to `return 6` too, on line 5, before both the matches, the same each time it's asked."""
         harness.scratch.write("app.py", functions({1: 6, 3: 6, 13: 26}))
@@ -332,7 +350,8 @@ async def test_find_text_keeps_the_highlight_on_its_line_as_a_match_appears_befo
     assert lines(harness.review().comments[0]).start == 20
 
 
-async def test_find_text_reopens_with_the_last_text_from_the_match_the_cursor_is_on(harness: Harness) -> None:
+async def test_find_text_reopens_with_the_last_text_from_the_match_the_cursor_is_on(whole_harness: Harness) -> None:
+    harness = whole_harness
     await harness.run(
         [
             *keys("/"),
@@ -361,13 +380,15 @@ async def test_leaving_find_text_puts_the_cursor_back_where_it_was(harness: Harn
     assert harness.review().summary == "s"
 
 
-async def test_find_text_with_nothing_typed_leaves_the_view_where_it_is(harness: Harness) -> None:
+async def test_find_text_with_nothing_typed_leaves_the_view_where_it_is(whole_harness: Harness) -> None:
+    harness = whole_harness
     await harness.run([*keys(Key.PageDown), harness.shot(), *keys("/"), harness.shot()])
 
     assert where(harness.frames[1], " 30  30 ") == where(harness.frames[0], " 30  30 ")
 
 
-async def test_clicking_a_listed_match_goes_to_it(harness: Harness) -> None:
+async def test_clicking_a_listed_match_goes_to_it(whole_harness: Harness) -> None:
+    harness = whole_harness
     await harness.run([*keys("/"), *typed("return 6"), harness.shot()])
     entry = where(harness.frames[0], "app.py:20")
 
@@ -474,41 +495,157 @@ async def test_s_twice_returns_to_the_unified_view(harness: Harness) -> None:
     assert harness.preferences.load().view_mode is ViewMode.UNIFIED
 
 
-async def test_b_switches_to_the_merge_base_and_remembers_it(harness: Harness) -> None:
+def branch_with_commits(harness: Harness, *subjects: str) -> list[str]:
+    """Puts `feature` off `main`, with an empty commit for each of `subjects`, and returns their hashes, oldest first."""
     harness.scratch.git("checkout", "--quiet", "-b", "feature")
+    return [harness.scratch.empty_commit(subject) for subject in subjects]
 
-    await harness.run([*keys("b"), showing("merge base"), harness.shot(), ENTER, *typed("x"), ESCAPE])
+
+async def test_b_lists_the_branch_back_to_the_merge_base_under_the_working_tree(harness: Harness) -> None:
+    first, second = branch_with_commits(harness, "first on feature", "second on feature")
+
+    await harness.run([*keys("b"), showing("merge base with main"), harness.shot()])
+
+    rows = [line for line in harness.frames[0].splitlines() if "on feature" in line or "merge base with" in line]
+    assert "working tree" in harness.frames[0]
+    assert [second[:7] in rows[0], first[:7] in rows[1], "merge base with main" in rows[2]] == [True, True, True]
+    assert ("HEAD" in rows[0], "current base" in rows[0], "● " in rows[0]) == (True, True, True)
+
+
+async def test_moving_down_the_picker_draws_the_diff_down_to_the_highlighted_commit(harness: Harness) -> None:
+    branch_with_commits(harness, "first on feature", "second on feature")
+
+    await harness.run([*keys("b"), showing("merge base with main"), *keys(Key.Down, "j"), harness.shot()])
+
+    rows = [line for line in harness.frames[0].splitlines() if "on feature" in line or "merge base with" in line]
+    assert ["│ " in rows[0], "│ " in rows[1], "● " in rows[2]] == [True, True, True]
+
+
+async def test_enter_on_the_merge_base_follows_it_and_remembers_it(harness: Harness) -> None:
+    branch_with_commits(harness, "on feature")
+
+    await harness.run(
+        [*keys("b"), showing("merge base with main"), *keys(Key.Down), ENTER, showing("merge base"), harness.shot()]
+    )
 
     assert "against main (merge base" in harness.frames[0]
-    assert harness.review().base_mode is BaseMode.MERGE_BASE
+    assert harness.review().base == FOLLOW_MERGE_BASE
 
 
-async def test_b_without_a_branch_to_merge_with_says_so(harness: Harness) -> None:
-    await harness.run([*keys("b"), harness.shot()], target=None)
+async def test_enter_on_another_commit_pins_it(harness: Harness) -> None:
+    first, _ = branch_with_commits(harness, "first on feature", "second on feature")
 
-    assert "No branch to take a merge base with; pass one with --base" in harness.frames[0]
+    await harness.run(
+        [*keys("b"), showing("merge base with main"), *keys(Key.Down), ENTER, showing("against commit"), harness.shot()]
+    )
 
-
-async def test_a_notice_is_centered(harness: Harness) -> None:
-    await harness.run([*keys("b"), harness.shot()], target=None)
-
-    (line,) = (line for line in harness.frames[0].splitlines() if "No branch to take" in line)
-    assert abs((len(line) - len(line.lstrip())) - (len(line) - len(line.rstrip()))) <= 1
+    assert f"against commit {first[:7]}" in harness.frames[0]
+    assert harness.review().base == pinned(first)
 
 
-async def test_a_git_failure_shows_as_a_notice(harness: Harness) -> None:
+async def test_the_picker_stops_at_either_end_and_moves_back_up(harness: Harness) -> None:
+    first, _ = branch_with_commits(harness, "first on feature", "second on feature")
+
+    await harness.run(
+        [*keys("b"), showing("merge base with main"), *keys(Key.Up, *[Key.Down] * 4), harness.shot(), *keys("k"), ENTER]
+    )
+
+    (row,) = (line for line in harness.frames[0].splitlines() if "● " in line)
+    assert "merge base with main" in row
+    assert harness.review().base == pinned(first)
+
+
+async def test_a_pinned_base_stays_put_as_head_moves(harness: Harness) -> None:
+    first, _ = branch_with_commits(harness, "first on feature", "second on feature")
+
+    def commit_more(_: object) -> bool:
+        harness.scratch.empty_commit("third on feature")
+        return True
+
+    await harness.run(
+        [
+            WaitFor(commit_more, timeout=timedelta(seconds=10)),
+            *keys("b"),
+            showing("third on feature"),
+            harness.shot(),
+        ],
+        base=pinned(first),
+    )
+
+    (row,) = (line for line in harness.frames[0].splitlines() if "current base" in line)
+    assert first[:7] in row
+
+
+async def test_clicking_a_commit_in_the_picker_picks_it(harness: Harness) -> None:
+    first, _ = branch_with_commits(harness, "first on feature", "second on feature")
+
+    await harness.run([*keys("b"), showing("first on feature"), harness.shot()])
+    row = where(harness.frames[0], "first on feature")
+
+    await harness.run([*keys("b"), showing("first on feature"), *click(row.x, row.y)])
+
+    assert harness.review().base == pinned(first)
+
+
+async def test_escape_closes_the_picker_and_keeps_the_base(harness: Harness) -> None:
+    branch_with_commits(harness, "on feature")
+
+    await harness.run([*keys("b"), showing("merge base with main"), *keys(Key.Down), ESCAPE, harness.shot()])
+
+    assert "Compare the working tree with" not in harness.frames[0]
+    assert "against HEAD" in harness.frames[0]
+
+
+async def test_tab_closes_the_picker(harness: Harness) -> None:
+    await harness.run([*keys("b"), showing("Compare the working tree with"), TAB, harness.shot()])
+
+    assert "Compare the working tree with" not in harness.frames[0]
+
+
+async def test_the_picker_without_a_branch_to_merge_with_lists_heads_history(harness: Harness) -> None:
+    earlier = harness.scratch.git("rev-parse", "HEAD").strip()
+    harness.scratch.empty_commit("later on main")
+
+    await harness.run([*keys("b"), showing("later on main"), harness.shot()], target=None)
+
+    assert "merge base with" not in harness.frames[0]
+    assert where(harness.frames[0], earlier[:7]).y == where(harness.frames[0], "later on main").y + 1
+
+
+async def test_the_picker_says_why_it_cant_read_the_history(harness: Harness) -> None:
     await harness.run([*keys("b"), showing("failed"), harness.shot()], target="no-such-branch")
 
     assert "git merge-base HEAD no-such-branch failed" in harness.frames[0]
 
 
+async def test_a_pinned_base_that_is_gone_says_so(harness: Harness) -> None:
+    await harness.run([showing("isn't in the repository"), harness.shot()], base=pinned("f" * 40), loaded="")
+
+    assert "The base commit fffffff isn't in the repository any more; b picks another" in harness.frames[0]
+
+
+async def test_a_notice_is_centered(harness: Harness) -> None:
+    await harness.run([*keys("c"), showing("Copied"), harness.shot()])
+
+    (line,) = (line for line in harness.frames[0].splitlines() if "Copied review" in line)
+    assert abs((len(line) - len(line.lstrip())) - (len(line) - len(line.rstrip()))) <= 1
+
+
+async def test_a_git_failure_shows_as_a_notice(harness: Harness) -> None:
+    await harness.run([showing("failed"), harness.shot()], target="no-such-branch", base=FOLLOW_MERGE_BASE, loaded="")
+
+    assert "git merge-base HEAD no-such-branch failed" in harness.frames[0]
+
+
 def code_row(harness: Harness, shot: int) -> str:
+    # The first line of `app.py` shows only when the whole file does, so these tests take `whole_harness`.
     """The colors of the first line of `app.py`, which sits above the theme picker, in one of the screenshots."""
     y = where(harness.frames[shot], "def f0():").y
     return harness.colored[shot].splitlines()[y]
 
 
-async def test_theme_picker_previews_the_highlighted_theme_and_keeps_the_chosen_one(harness: Harness) -> None:
+async def test_theme_picker_previews_the_highlighted_theme_and_keeps_the_chosen_one(whole_harness: Harness) -> None:
+    harness = whole_harness
     await harness.run([harness.shot(), *keys("t"), harness.shot(), *typed("monokai"), harness.shot(), ENTER])
 
     assert code_row(harness, 1) == code_row(harness, 0)
@@ -516,21 +653,25 @@ async def test_theme_picker_previews_the_highlighted_theme_and_keeps_the_chosen_
     assert harness.preferences.load().theme == "monokai"
 
 
-async def test_theme_picker_escape_reverts_and_saves_nothing(harness: Harness) -> None:
+async def test_theme_picker_escape_reverts_and_saves_nothing(whole_harness: Harness) -> None:
+    harness = whole_harness
+    saved = harness.preferences.path.read_text()
     await harness.run([harness.shot(), *keys("t", Key.Down, Key.Down, Key.Up), harness.shot(), ESCAPE, harness.shot()])
 
     assert code_row(harness, 1) != code_row(harness, 0)
     assert code_row(harness, 2) == code_row(harness, 0)
-    assert not harness.preferences.path.exists()
+    assert harness.preferences.path.read_text() == saved
 
 
-async def test_tab_out_of_the_theme_picker_closes_it_and_reverts(harness: Harness) -> None:
+async def test_tab_out_of_the_theme_picker_closes_it_and_reverts(whole_harness: Harness) -> None:
+    harness = whole_harness
+    saved = harness.preferences.path.read_text()
     await harness.run([harness.shot(), *keys("t", Key.Down), harness.shot(), TAB, harness.shot()])
 
     assert "Syntax theme" in harness.frames[1]
     assert "Syntax theme" not in harness.frames[2]
     assert code_row(harness, 2) == code_row(harness, 0)
-    assert not harness.preferences.path.exists()
+    assert harness.preferences.path.read_text() == saved
 
 
 async def test_tab_out_of_the_summary_dialog_closes_it_and_keeps_the_summary(harness: Harness) -> None:
@@ -558,7 +699,7 @@ async def test_clicking_the_summary_while_editing_it_keeps_editing(harness: Harn
 
 async def test_t_with_the_theme_picker_left_open_returns_to_it(harness: Harness) -> None:
     await harness.run([harness.shot()])
-    row = where(harness.frames[0], "def f0():")
+    row = where(harness.frames[0], "def f3():")
 
     await harness.run([*keys("t"), *click(row.x, row.y), *keys("t"), *typed("monokai"), ENTER])
 
@@ -594,7 +735,7 @@ async def test_clicking_the_name_in_the_status_line_edits_it(harness: Harness) -
 
 async def test_e_with_the_name_field_left_open_carries_on_with_what_was_typed(harness: Harness) -> None:
     await harness.run([harness.shot()])
-    row = where(harness.frames[0], "def f0():")
+    row = where(harness.frames[0], "def f3():")
 
     await harness.run([*keys("e"), *ERASE_NAME, *typed("draft"), *click(row.x, row.y), *keys("e"), *typed("!"), ENTER])
 
@@ -674,7 +815,8 @@ async def test_clicking_a_header_then_down_reaches_its_first_row(harness: Harnes
 
     await harness.run([*click(header.x, header.y), *keys(Key.Down), ENTER, *typed("top"), ESCAPE])
 
-    assert lines(harness.review().comments[0]).start == 1
+    # Line 8 is the first that shows: three lines of context above line 11, the first hunk.
+    assert lines(harness.review().comments[0]).start == 8
 
 
 async def test_clicking_a_file_in_the_picker_jumps_to_it(harness: Harness) -> None:
@@ -706,19 +848,22 @@ async def test_moving_down_from_the_top_of_a_scrolled_view_leaves_the_view_be(ha
 PAGE = int((HEIGHT - 4) * 0.875)
 
 
-async def test_page_down_scrolls_the_view_by_seven_eighths_of_it(harness: Harness) -> None:
+async def test_page_down_scrolls_the_view_by_seven_eighths_of_it(whole_harness: Harness) -> None:
+    harness = whole_harness
     await harness.run([harness.shot(), *keys(Key.PageDown), harness.shot()])
 
     assert where(harness.frames[0], " 20  20 ").y - where(harness.frames[1], " 20  20 ").y == PAGE
 
 
-async def test_page_up_scrolls_the_view_back_by_as_much(harness: Harness) -> None:
+async def test_page_up_scrolls_the_view_back_by_as_much(whole_harness: Harness) -> None:
+    harness = whole_harness
     await harness.run([*keys(Key.PageDown), harness.shot(), *keys(Key.PageDown, Key.PageUp), harness.shot()])
 
     assert harness.frames[1] == harness.frames[0]
 
 
-async def test_page_down_moves_the_cursor_as_far_as_the_view_scrolls(harness: Harness) -> None:
+async def test_page_down_moves_the_cursor_as_far_as_the_view_scrolls(whole_harness: Harness) -> None:
+    harness = whole_harness
     # From the summary, past the header and the rows, the removed line 11 among them.
     await harness.run([*keys(Key.PageDown), ENTER, *typed("x"), ESCAPE])
 
@@ -744,10 +889,12 @@ async def test_a_refresh_that_succeeds_clears_the_git_failure_and_no_other_notic
         harness.scratch.write("later.py", "appeared = True\n")
         return True
 
+    repository = await find_repository(harness.scratch.root)
+    # Drawn until the merge base fails, so there's a diff to copy.
+    against_head = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, None))
     recovered = WaitFor(lambda frame: "failed" not in screen_text(frame), timeout=timedelta(seconds=10))
     await harness.run(
         [
-            *keys("b"),
             showing("failed"),
             *keys("c"),
             showing("Copied"),
@@ -757,6 +904,9 @@ async def test_a_refresh_that_succeeds_clears_the_git_failure_and_no_other_notic
             harness.shot(),
         ],
         target="no-such-branch",
+        base=FOLLOW_MERGE_BASE,
+        initial_diff=against_head,
+        loaded="",
     )
 
     assert "git merge-base HEAD no-such-branch failed" in harness.frames[0]
@@ -873,21 +1023,12 @@ def test_copying_before_the_diff_loads_says_so() -> None:
 
 
 def test_copying_cites_the_diff() -> None:
-    document = build_document(diff_of(), (), ViewMode.UNIFIED)
+    document = build_document(diff_of(), (), ViewMode.UNIFIED, Scope.WHOLE)
 
     notice, control = copied(review(), document)
 
     assert notice == f"Copied review “{review().name}” to the clipboard as Markdown"
     assert control == CopyToClipboard(to_markdown(review(), diff_of()))
-
-
-@pytest.mark.parametrize(
-    ("mode", "other"),
-    [(BaseMode.HEAD, BaseMode.MERGE_BASE), (BaseMode.MERGE_BASE, BaseMode.HEAD)],
-    ids=["head", "merge-base"],
-)
-def test_other_base_switches_between_the_two_bases(mode: BaseMode, other: BaseMode) -> None:
-    assert other_base(mode) is other
 
 
 def status_groups(branch: str, against: str, *counts: tuple[Chunk, ...]) -> tuple[tuple[Chunk, ...], ...]:
@@ -951,8 +1092,20 @@ CHANGED_FILES = (
                 quiet("unified"),
             ),
         ),
+        (
+            review(branch="feature/x"),
+            diff_of(mode=BaseMode.COMMIT, label="c0ffee0"),
+            ViewMode.UNIFIED,
+            status_groups(
+                "feature/x",
+                "against commit c0ffee0",
+                files_group("0 files", " +0", " -0"),
+                quiet("0 comments"),
+                quiet("unified"),
+            ),
+        ),
     ],
-    ids=["loading-detached", "head", "merge-base"],
+    ids=["loading-detached", "head", "merge-base", "commit"],
 )
 def test_status_line_says_the_branch_the_base_and_the_counts(
     reviewed: Review, diff: Diff | None, mode: ViewMode, expected: tuple[tuple[Chunk, ...], ...]
@@ -964,7 +1117,7 @@ HANDLE = FocusHandle()
 
 
 def test_key_hints_list_the_diffs_keys() -> None:
-    assert key_hints(INITIAL_SESSION, True) == (
+    assert key_hints(INITIAL_SESSION, Scope.WHOLE, True) == (
         "↑↓←→ move",
         "⇧↑↓ select",
         "tab hunk/comment",
@@ -976,6 +1129,7 @@ def test_key_hints_list_the_diffs_keys() -> None:
         "r summary",
         "e rename",
         "s split",
+        "z fold unchanged",
         "b base",
         "t theme",
         "f files",
@@ -985,6 +1139,16 @@ def test_key_hints_list_the_diffs_keys() -> None:
         "⇧? fold keys",
         "q quit",
     )
+
+
+@pytest.mark.parametrize(
+    ("scope", "hint"),
+    [(Scope.CONTEXT, "z unfold unchanged"), (Scope.WHOLE, "z fold unchanged")],
+)
+def test_key_hints_say_z_does_the_opposite_of_the_scope_shown(scope: Scope, hint: str) -> None:
+    hints = key_hints(INITIAL_SESSION, scope, True)
+
+    assert [h for h in hints if h.startswith("z ")] == [hint]
 
 
 @pytest.mark.parametrize(
@@ -1011,7 +1175,7 @@ async def test_the_app_starts_saying_a_review_file_cant_be_read(harness: Harness
 
 
 def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
-    assert key_hints(INITIAL_SESSION, False) == ()
+    assert key_hints(INITIAL_SESSION, Scope.CONTEXT, False) == ()
 
 
 @pytest.mark.parametrize(
@@ -1028,8 +1192,14 @@ def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
             ("↑↓ choose", "enter open", "e rename", "dd delete", "esc close"),
         ),
         (
-            replace(INITIAL_SESSION, picking_theme=PickingTheme(HANDLE, Query(text="mono", highlighted=2))),
+            replace(
+                INITIAL_SESSION, picking_theme=PickingTheme(HANDLE, Query(text="mono", highlight=Highlight(index=2)))
+            ),
             ("type to filter", "↑↓ preview", "enter keep", "esc revert"),
+        ),
+        (
+            replace(INITIAL_SESSION, picking_base=HANDLE, editing=(3, HANDLE)),
+            ("↑↓ choose", "enter compare with it", "esc close"),
         ),
         (
             replace(INITIAL_SESSION, editing=(3, HANDLE)),
@@ -1040,10 +1210,10 @@ def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
             ("press d again to delete #7", "anything else to keep it"),
         ),
     ],
-    ids=["naming", "jumping", "searching", "managing", "picking-theme", "editing", "confirming-delete"],
+    ids=["naming", "jumping", "searching", "managing", "picking-theme", "picking-base", "editing", "confirming-delete"],
 )
 def test_key_hints_list_the_keys_of_what_has_focus_even_folded(session: Session, hints: tuple[str, ...]) -> None:
-    assert key_hints(session, False) == hints
+    assert key_hints(session, Scope.CONTEXT, False) == hints
 
 
 def test_pills_pad_each_group_on_its_background_a_bare_space_apart_keeping_its_words_together() -> None:
@@ -1076,8 +1246,8 @@ def test_key_pills_draw_each_hint_in_slate_as_a_pill() -> None:
 async def test_the_footer_wraps_between_hints_rather_than_cutting_them_off(harness: Harness) -> None:
     await harness.run([harness.shot()])
 
-    *_, before_last, last = harness.frames[0].splitlines()
-    assert ("c copy" in before_last, last.split()[-2:]) == (True, ["q", "quit"])
+    *_, first, middle, last = harness.frames[0].splitlines()
+    assert ("enter comment" in first, "o reviews" in middle, last.split()[-2:]) == (True, True, ["q", "quit"])
 
 
 async def test_question_mark_folds_the_keys_away_and_back(harness: Harness) -> None:
@@ -1156,3 +1326,82 @@ async def test_the_summary_dialog_title_is_on_its_border(harness: Harness) -> No
 
     (dialog_top,) = [line for line in harness.frames[0].splitlines() if "Review summary" in line and "│" not in line]
     assert "╭ Review summary ─" in dialog_top
+
+
+async def test_hunks_show_with_their_context_and_a_line_for_each_run_hidden(harness: Harness) -> None:
+    await harness.run([harness.shot()])
+
+    gaps = [line.split("│ ", 1)[1].strip() for line in harness.frames[0].splitlines() if "unchanged line" in line]
+    assert (gaps, "def f0():" in harness.frames[0]) == (
+        ["⋯ 7 unchanged lines", "⋯ 23 unchanged lines", "⋯ 46 unchanged lines"],
+        False,
+    )
+
+
+async def test_z_shows_whole_files_then_hunks_again_and_keeps_the_choice(harness: Harness) -> None:
+    await harness.run([*keys("z"), harness.shot()])
+    whole = harness.preferences.load().scope
+    await harness.run([*keys("z"), harness.shot()])
+
+    assert (
+        "def f0():" in harness.frames[0],
+        "unchanged line" in harness.frames[0],
+        whole,
+        "unchanged line" in harness.frames[1],
+        harness.preferences.load().scope,
+    ) == (True, False, Scope.WHOLE, True, Scope.CONTEXT)
+
+
+async def test_z_from_a_hidden_line_moves_the_cursor_to_the_nearest_line_shown(whole_harness: Harness) -> None:
+    # Onto line 1, from the summary and past the header, which hunks and their context hide.
+    await whole_harness.run([*keys(Key.Down, Key.Down, "z"), ENTER, *typed("near"), ESCAPE])
+
+    assert lines(whole_harness.review().comments[0]).start == 8
+
+
+async def test_z_keeps_the_cursor_on_its_line(harness: Harness) -> None:
+    await harness.run([TAB, *keys("z"), ENTER, *typed("same"), ESCAPE])
+
+    (made,) = harness.review().comments
+    assert (lines(made).side, lines(made).start) == (Side.OLD, 11)
+
+
+async def test_a_selection_across_hidden_lines_comments_on_them_too(harness: Harness) -> None:
+    # From `return 6` (line 11) down past the 23 hidden lines to line 38.
+    await harness.run([TAB, *keys(Key.Down, "J", "J", "J", "J"), ENTER, *typed("all of it"), ESCAPE])
+
+    repository = await find_repository(harness.scratch.root)
+    diff = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "HEAD"))
+    (made,) = harness.review().comments
+    assert (lines(made).start, lines(made).end, len(made.excerpt), is_outdated(made, diff)) == (
+        11,
+        38,
+        28,
+        False,
+    )
+
+
+@pytest.mark.parametrize(
+    "goes_away",
+    [[*typed("doomed"), ESCAPE, *keys("d", "d")], [ESCAPE]],
+    ids=["deleted", "left-empty"],
+)
+async def test_a_comment_going_away_leaves_the_cursor_on_its_line_as_the_rows_it_kept_fold(
+    harness: Harness, goes_away: list[KeyPressed]
+) -> None:
+    # Line 38, three above the second hunk, whose comment keeps lines 35 to 37 in view while it lasts.
+    await harness.run([TAB, TAB, *keys(Key.Up, Key.Up, Key.Up), ENTER, *goes_away, ENTER, *typed("here"), ESCAPE])
+
+    (made,) = harness.review().comments
+    assert (lines(made).side, lines(made).start) == (Side.NEW, 38)
+
+
+async def test_a_file_whose_only_change_is_its_mode_shows_a_line_for_all_of_it(harness: Harness) -> None:
+    (harness.scratch.root / "app.py").write_text(functions())
+    harness.scratch.write("tool.sh", "echo one\necho two\n")
+    harness.scratch.commit()
+    (harness.scratch.root / "tool.sh").chmod(0o755)
+
+    await harness.run([harness.shot()], loaded="tool.sh")
+
+    assert "⋯ 2 unchanged lines" in harness.frames[0]

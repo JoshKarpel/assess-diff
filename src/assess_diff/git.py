@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
+from itertools import batched
 from pathlib import Path
 from typing import assert_never
 
@@ -22,6 +25,10 @@ from assess_diff.diff import git_lines
 from assess_diff.diff import parse_diff
 from assess_diff.diff import placeholder_file
 from assess_diff.diff import untracked_placeholder
+from assess_diff.review import BaseChoice
+from assess_diff.review import FollowHead
+from assess_diff.review import FollowMergeBase
+from assess_diff.review import PinnedCommit
 
 # Past this, a file's content isn't shown: an agent's stray log or build output would swamp the view.
 MAX_FILE_BYTES = 1024 * 1024
@@ -160,17 +167,89 @@ async def default_branch(repository: Repository) -> str:
     raise GitError("Can't tell which branch this one merges into; pass it with --base")
 
 
-async def resolve_base(repository: Repository, mode: BaseMode, target: str) -> Base:
-    """The commit to compare the working tree with, for `mode`, where `target` is the default branch."""
-    match mode:
-        case BaseMode.HEAD:
-            commit = (await git(repository.worktree, "rev-parse", "HEAD")).strip()
-            return Base(mode=mode, commit=commit, label="HEAD")
-        case BaseMode.MERGE_BASE:
+async def resolve_base(repository: Repository, base: BaseChoice, target: str | None) -> Base:
+    """
+    The commit to compare the working tree with, for `base`, where `target` is the default branch, if there is one.
+    Without one, the merge base is `HEAD`, though the review keeps the merge base for when there is one.
+
+    Raises:
+        GitError: If git can't resolve it, as when the target doesn't exist or a pinned commit is gone.
+    """
+    match base:
+        case FollowMergeBase() if target is not None:
             commit = (await git(repository.worktree, "merge-base", "HEAD", target)).strip()
-            return Base(mode=mode, commit=commit, label=target)
+            return Base(mode=BaseMode.MERGE_BASE, commit=commit, label=target)
+        case FollowHead() | FollowMergeBase():
+            commit = (await git(repository.worktree, "rev-parse", "HEAD")).strip()
+            return Base(mode=BaseMode.HEAD, commit=commit, label="HEAD")
+        case PinnedCommit(commit=pinned):
+            try:
+                commit = (
+                    await git(repository.worktree, "rev-parse", "--verify", "--quiet", f"{pinned}^{{commit}}")
+                ).strip()
+            except GitError:
+                # A rebase or an amend leaves the old commit to be garbage-collected, so it can go away under a review.
+                raise GitError(
+                    f"The base commit {pinned[:7]} isn't in the repository any more; b picks another"
+                ) from None
+            return Base(mode=BaseMode.COMMIT, commit=commit, label=commit[:7])
         case _ as unreachable:
             assert_never(unreachable)
+
+
+@dataclass(frozen=True, slots=True)
+class Commit:
+    """One commit as the base picker lists it."""
+
+    commit: str
+    subject: str
+    committed: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class History:
+    """
+    The commits the base picker offers, newest first, starting at `HEAD`:
+    the branch's own back to `merge_base`, the last of them, when the branch has any,
+    or else `HEAD`'s recent history, which `merge_base` may be among or not.
+    """
+
+    commits: tuple[Commit, ...]
+    merge_base: str | None
+    """The merge base with the default branch, or `None` when there's no default branch to take it with."""
+
+
+# A branch is rarely longer than this, and the history of one that isn't goes back far enough to pick from.
+HISTORY_LIMIT = 200
+
+LOG_FORMAT = "--format=%H%x00%ct%x00%s"
+
+
+async def branch_history(repository: Repository, target: str | None, limit: int = HISTORY_LIMIT) -> History:
+    """
+    The commits to pick a base from: `HEAD`'s first parents back to the merge base with `target`,
+    since a merge of the default branch into this one would otherwise list every commit it brought,
+    or, when the branch has no commits of its own or there's no `target`, the last `limit` of them.
+    """
+    head = (await git(repository.worktree, "rev-parse", "HEAD")).strip()
+    merge_base = None if target is None else (await git(repository.worktree, "merge-base", "HEAD", target)).strip()
+    if merge_base is None or merge_base == head:
+        output = await git(repository.worktree, "log", "-z", "--first-parent", LOG_FORMAT, f"-n{limit}", "HEAD")
+        return History(commits=parse_log(output), merge_base=merge_base)
+    branch, base = await asyncio.gather(
+        git(repository.worktree, "log", "-z", "--first-parent", LOG_FORMAT, f"-n{limit}", "HEAD", f"^{merge_base}"),
+        git(repository.worktree, "log", "-z", LOG_FORMAT, "-n1", merge_base),
+    )
+    return History(commits=(*parse_log(branch), *parse_log(base)), merge_base=merge_base)
+
+
+def parse_log(output: str) -> tuple[Commit, ...]:
+    """Commits from `git log -z` in `LOG_FORMAT`, which separates their fields with NUL, as `-z` separates them."""
+    fields = output.removesuffix("\0").split("\0") if output else []
+    return tuple(
+        Commit(commit=commit, subject=subject, committed=datetime.fromtimestamp(int(timestamp), UTC))
+        for commit, timestamp, subject in batched(fields, 3, strict=True)
+    )
 
 
 async def compute_diff(repository: Repository, base: Base) -> Diff:

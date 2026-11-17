@@ -7,6 +7,7 @@ from assess_diff.navigation import CommentAt
 from assess_diff.navigation import HeaderAt
 from assess_diff.navigation import Position
 from assess_diff.navigation import RowAt
+from assess_diff.navigation import Scope
 from assess_diff.navigation import SummaryAt
 from assess_diff.navigation import ViewMode
 from assess_diff.navigation import build_document
@@ -31,7 +32,7 @@ APP = modified(
     context(3, 3, "    return Total(total)  # the total"),
 )
 CALLER = modified("caller.py", context(7, 7, "print(report(items))"), added(8, "log(compute_sum)", hunk=1))
-UNIFIED = build_document(diff_of(APP, CALLER), (), ViewMode.UNIFIED)
+UNIFIED = build_document(diff_of(APP, CALLER), (), ViewMode.UNIFIED, Scope.WHOLE)
 
 
 def test_find_lists_every_line_holding_the_query_in_display_order() -> None:
@@ -67,7 +68,9 @@ def test_find_ignores_case_unless_the_query_has_a_capital(query: str, rows: list
 
 @pytest.mark.parametrize(("query", "count"), [("report", 1), ("Report", 1), ("REPORT", 0)])
 def test_find_matches_a_name_written_with_capitals_only_as_typed_once_the_query_has_one(query: str, count: int) -> None:
-    document = build_document(diff_of(modified("views.py", added(1, "class Report:"))), (), ViewMode.UNIFIED)
+    document = build_document(
+        diff_of(modified("views.py", added(1, "class Report:"))), (), ViewMode.UNIFIED, Scope.WHOLE
+    )
 
     assert len(find(document, query)) == count
 
@@ -78,7 +81,7 @@ def test_find_matches_the_query_as_literal_text() -> None:
 
 
 def test_find_in_the_split_view_finds_each_line_of_a_row_at_that_row() -> None:
-    split = build_document(diff_of(APP), (), ViewMode.SPLIT)
+    split = build_document(diff_of(APP), (), ViewMode.SPLIT, Scope.WHOLE)
 
     assert [(match.at, match.line) for match in find(split, "compute_")] == [
         (RowAt("app.py", 1), RENAMED_OLD),
@@ -87,7 +90,7 @@ def test_find_in_the_split_view_finds_each_line_of_a_row_at_that_row() -> None:
 
 
 FOUND = find(UNIFIED, "compute")
-COMMENTED = build_document(diff_of(APP, CALLER), (comment(1, "app.py", 2, 2, ()),), ViewMode.UNIFIED)
+COMMENTED = build_document(diff_of(APP, CALLER), (comment(1, "app.py", 2, 2, ()),), ViewMode.UNIFIED, Scope.WHOLE)
 
 
 @pytest.mark.parametrize(
@@ -120,14 +123,16 @@ def test_highlighted_is_the_one_chosen_within_those_found(chosen: int, expected:
 
 def test_highlighted_stays_on_the_line_chosen_as_a_match_appears_before_it() -> None:
     chosen = Highlight(key=match_key(FOUND[1]), index=1)
-    document = build_document(diff_of(modified("aaa.py", added(1, "compute()")), APP, CALLER), (), ViewMode.UNIFIED)
+    document = build_document(
+        diff_of(modified("aaa.py", added(1, "compute()")), APP, CALLER), (), ViewMode.UNIFIED, Scope.WHOLE
+    )
 
     # The new file's match comes first, so the line chosen, the second found before, is now the third.
     assert highlighted(document, find(document, "compute"), SummaryAt(), chosen) == 2
 
 
 def test_match_key_tells_apart_the_lines_of_a_split_row() -> None:
-    split = build_document(diff_of(APP), (), ViewMode.SPLIT)
+    split = build_document(diff_of(APP), (), ViewMode.SPLIT, Scope.WHOLE)
     old, new = find(split, "compute_")
 
     assert match_key(old) != match_key(new)

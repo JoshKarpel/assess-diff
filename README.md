@@ -3,7 +3,7 @@
 Review an agent's working-tree diff in the terminal while it's still working,
 and hand the review back to it as Markdown.
 
-`assess-diff` shows every changed file whole, in one scroll, reloading as files change.
+`assess-diff` shows every changed file's hunks, or with `z` the whole file, in one scroll, reloading as files change.
 You comment on any line or range, write a summary,
 and copy the review (`c`) to paste into the agent, comments in the order you wrote them,
 each with a `path:line` reference,
@@ -11,7 +11,7 @@ and the lines it was about where they've changed since.
 Reviews are saved as you type, under `$XDG_DATA_HOME/assess-diff/`,
 and belong to the repository, across its worktrees.
 
-![Commenting on a range of lines and a whole file, going to a comment by its number, the split view, choosing a syntax theme, writing the summary, and copying the review](https://raw.githubusercontent.com/JoshKarpel/assess-diff/main/demo/demo.gif)
+![Commenting on a range of lines and a whole file, going to a comment by its number, the split view, whole files, choosing a syntax theme, writing the summary, and copying the review](https://raw.githubusercontent.com/JoshKarpel/assess-diff/main/demo/demo.gif)
 
 It's built on [counterweight](https://www.counterweight.dev/).
 
@@ -19,7 +19,7 @@ It's built on [counterweight](https://www.counterweight.dev/).
 
 ```bash
 uv tool install assess-diff
-assess-diff              # review this worktree's changes since HEAD (b switches to the merge base)
+assess-diff              # review this worktree's changes since HEAD (b picks another base)
 assess-diff --base main  # review them against the merge base with main
 assess-diff --help       # the other commands: list, show, delete
 ```
@@ -30,10 +30,15 @@ click a line to move there (Shift+click to select), a comment to edit it, a file
 
 ## Reviewing
 
-The diff is against `HEAD`, the change since the last commit,
-or, with `b`, against the merge base with the default branch, the whole branch as a pull request would show it.
+The diff is against `HEAD`, the change since the last commit, until you pick another base with `b`.
+The picker lists the branch's commits under the working tree, back to the merge base with the default branch,
+with a line from the working tree down to the highlighted commit, the diff's two ends.
+The merge base shows the whole branch as a pull request would, and moves as the default branch is merged in;
+`HEAD` follows each commit, so the diff shows only what's uncommitted;
+any other commit stays put as the agent commits, so the diff keeps everything since it.
+On the default branch itself, or with none, the picker lists `HEAD`'s recent history instead.
 The default branch is what `origin/HEAD` points at, or else a local `main` or `master`;
-`--base` names another, and starts a new review on it.
+`--base` names another, and starts a new review against the merge base with it.
 A resumed review keeps the base it was last viewed against.
 
 Tab and Shift+Tab jump between hunks and comments, and `n` and `N` between comments alone.
@@ -44,8 +49,11 @@ Left and Right (or `h` and `l`, a sideways swipe, or Shift and the wheel) scroll
 keeping the line numbers in place, and `0` scrolls back to the start.
 The file picker on the left (`f`) jumps to a file, or to the summary from its entry at the top,
 and `/` there narrows it to the paths matching what you type.
-`s` switches between the unified and split views, and `t` picks a syntax theme, previewing each as you go.
-Both are kept as preferences, under `$XDG_CONFIG_HOME/assess-diff/`.
+Each hunk shows with three lines of context either side, and a line saying how many unchanged lines are hidden between;
+lines a comment is on stay in view with their context too.
+`z` switches between that and whole files,
+`s` between the unified and split views, and `t` picks a syntax theme, previewing each as you go.
+All three are kept as preferences, under `$XDG_CONFIG_HOME/assess-diff/`.
 
 Enter comments on the selected lines, or, on a file's header, on the whole file.
 Comments are numbered in the order you write them, and numbers are never reused,

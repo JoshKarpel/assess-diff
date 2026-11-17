@@ -25,6 +25,9 @@ from assess_diff.diff import FileDiff
 from assess_diff.diff import Line
 from assess_diff.diff import LineKind
 from assess_diff.diff import Side
+from assess_diff.migration import Migration
+from assess_diff.migration import UnknownVersion
+from assess_diff.migration import migrated
 
 
 class NewAnchor(BaseModel):
@@ -71,6 +74,45 @@ type LineAnchor = NewAnchor | OldAnchor
 Anchor = Annotated[NewAnchor | OldAnchor | FileAnchor, Field(discriminator="side")]
 
 
+class FollowHead(BaseModel):
+    """A base of whatever `HEAD` is, so a commit moves the base along with it and the diff shows only what's uncommitted."""
+
+    model_config = ConfigDict(frozen=True)
+
+    mode: Literal[BaseMode.HEAD]
+
+
+class FollowMergeBase(BaseModel):
+    """A base of the merge base with the default branch, so the diff shows the whole branch, as a pull request would."""
+
+    model_config = ConfigDict(frozen=True)
+
+    mode: Literal[BaseMode.MERGE_BASE]
+
+
+class PinnedCommit(BaseModel):
+    """
+    A base of one commit the reader picked, by its full hash, which stays put as `HEAD` moves,
+    so the diff keeps showing everything since it, the commits made after it included.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    mode: Literal[BaseMode.COMMIT]
+    commit: str
+
+
+BaseChoice = Annotated[FollowHead | FollowMergeBase | PinnedCommit, Field(discriminator="mode")]
+"""Which commit a review's diff starts from, as it's chosen, rather than the commit that resolves to now."""
+
+FOLLOW_HEAD = FollowHead(mode=BaseMode.HEAD)
+FOLLOW_MERGE_BASE = FollowMergeBase(mode=BaseMode.MERGE_BASE)
+
+
+def pinned(commit: str) -> PinnedCommit:
+    return PinnedCommit(mode=BaseMode.COMMIT, commit=commit)
+
+
 class ExcerptLine(BaseModel):
     """A line the commenter selected, as it was when the comment was made."""
 
@@ -94,7 +136,7 @@ class Comment(BaseModel):
 class Review(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    version: Literal[1]
+    version: Literal[2]
     id: str
     name: str
     """What the reader calls the review; the time it started, until they rename it."""
@@ -102,7 +144,7 @@ class Review(BaseModel):
     """The repository's common git directory, which every worktree of it shares."""
     worktree: Path
     branch: str | None
-    base_mode: BaseMode
+    base: BaseChoice
     """The base last reviewed against, which a resumed review and its export use."""
     created: datetime
     updated: datetime
@@ -117,7 +159,7 @@ class Review(BaseModel):
         project: Path,
         worktree: Path,
         branch: str | None,
-        base_mode: BaseMode,
+        base: BaseChoice,
         now: datetime,
     ) -> Review:
         return cls(
@@ -127,7 +169,7 @@ class Review(BaseModel):
             project=project,
             worktree=worktree,
             branch=branch,
-            base_mode=base_mode,
+            base=base,
             created=now,
             updated=now,
             summary="",
@@ -139,18 +181,21 @@ class Review(BaseModel):
         return next((comment for comment in self.comments if comment.number == number), None)
 
 
-CURRENT_VERSION = 1
+CURRENT_VERSION = 2
 
 
 class UnreadableReview(Exception):
     """A review file that can't be read: it isn't a review, or a newer version of assess-diff wrote it."""
 
 
-type Migration = Callable[[Mapping[str, object]], dict[str, object]]
-"""A review file's document at one version, rewritten as the next version would have written it."""
+def base_from_mode(older: Mapping[str, object]) -> dict[str, object]:
+    """Version 1 knew only the two bases that follow `HEAD`, by `base_mode`; version 2 can pin a commit, as `base`."""
+    document = {key: value for key, value in older.items() if key != "base_mode"}
+    return {**document, "version": 2, "base": {"mode": older.get("base_mode")}}
+
 
 # Each version's migration to the next, by the version it migrates from.
-MIGRATIONS: Mapping[int, Migration] = {}
+MIGRATIONS: Mapping[int, Migration] = {1: base_from_mode}
 
 
 def parse_review(content: bytes, migrations: Mapping[int, Migration] = MIGRATIONS) -> Review:
@@ -164,16 +209,10 @@ def parse_review(content: bytes, migrations: Mapping[int, Migration] = MIGRATION
     document = json.loads(content)
     if not isinstance(document, dict):
         raise UnreadableReview("A review file holds a JSON object")
-    # `type(...) is int` rather than `isinstance`, and checked even at the current version,
-    # since JSON's `true` and `1.0` compare equal to 1 (and `true` hashes as 1 in `migrations`), but no version wrote them.
-    while type(version := document.get("version")) is not int or version != CURRENT_VERSION:
-        migrate = migrations.get(version) if type(version) is int else None
-        if migrate is None:
-            raise UnreadableReview(
-                f"This review is version {version!r}, and this assess-diff reads up to version {CURRENT_VERSION}"
-            )
-        document = migrate(document)
-    return Review.model_validate(document)
+    try:
+        return Review.model_validate(migrated(document, migrations, CURRENT_VERSION))
+    except UnknownVersion as error:
+        raise UnreadableReview(f"This review is {error}") from error
 
 
 def default_name(started: datetime) -> str:

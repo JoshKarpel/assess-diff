@@ -11,13 +11,15 @@ from counterweight.styles.utilities import text_bold
 from counterweight.styles.utilities import text_color
 from counterweight.styles.utilities import text_dim
 
-from assess_diff.diff import BaseMode
 from assess_diff.diff import LineKind
 from assess_diff.preferences import PreferencesFile
+from assess_diff.review import FOLLOW_HEAD
 from assess_diff.review import Review
 from assess_diff.storage import ReviewStore
 from assess_diff.storage import Unreadable
+from assess_diff.ui.review_manager import NEW_REVIEW_KEY
 from assess_diff.ui.review_manager import entry_chunks
+from assess_diff.ui.review_manager import entry_key
 from assess_diff.ui.review_manager import unreadable_chunks
 from tests.builders import comment
 from tests.builders import review
@@ -50,7 +52,7 @@ def harness(scratch: Scratch, tmp_path: Path) -> Harness:
 def seed(harness: Harness, review_id: str, name: str, *, minutes: int, body: str = "") -> Review:
     """A saved review of the harness's worktree, updated `minutes` after the clock, with one comment if `body`."""
     root = harness.scratch.root
-    review = Review.start(review_id, root / ".git", root, "main", BaseMode.HEAD, CLOCK).model_copy(
+    review = Review.start(review_id, root / ".git", root, "main", FOLLOW_HEAD, CLOCK).model_copy(
         update={"name": name, "updated": CLOCK.replace(minute=minutes)}
     )
     if body:
@@ -95,6 +97,14 @@ def test_entry_marks_the_review_then_names_it_then_its_branch_comments_and_updat
         Chunk(content="the detached one", style=text_bold),
         Chunk(content="  detached HEAD  2 comments  updated 2026-07-21 09:47", style=text_dim),
     )
+
+
+def test_the_highlight_holds_a_review_by_its_id() -> None:
+    assert entry_key(review()) == "0199aaaa-review"
+
+
+def test_the_highlight_holds_new_review_by_a_key_of_its_own() -> None:
+    assert entry_key(None) is NEW_REVIEW_KEY
 
 
 def test_unreadable_chunks_name_the_file_and_the_first_line_of_why() -> None:
@@ -344,3 +354,17 @@ async def test_the_dialogs_keys_are_pills_as_the_screens_footer_draws_them(harne
         if "esc close   ● open" in plain
     )
     assert "48;2;51;65;85" in footer, "the pills are on the dialog's lighter pill color"
+
+
+async def test_the_highlight_stays_on_a_review_that_renaming_moves_down_the_list(harness: Harness) -> None:
+    # Renaming the open review saves it, which dates it at the clock, before the other's update.
+    seed(harness, REVIEW_ID, "the open one", minutes=9)
+    seed(harness, "other", "another one", minutes=5)
+
+    await harness.run([*keys("o", "j", "e"), *typed(" renamed"), ENTER, *keys("d"), harness.shot(), ESCAPE, ESCAPE])
+
+    assert dialog(harness.frames[0])[1:] == [
+        "another one  main  0 comments  updated 2026-06-01 12:05",
+        "● the open one renamed  main  0 comments  updated 2026-06-01 12:00",
+    ]
+    assert "press d again to delete “the open one renamed”" in harness.frames[0]

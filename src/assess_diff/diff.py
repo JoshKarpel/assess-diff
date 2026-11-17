@@ -108,10 +108,14 @@ class FileDiff:
 
 
 class BaseMode(StrEnum):
-    """What the working tree is compared with: the last commit, or where the branch left the default branch."""
+    """
+    What the working tree is compared with: the last commit, where the branch left the default branch,
+    or a commit the reader picked, which stays put as `HEAD` moves.
+    """
 
     HEAD = "head"
     MERGE_BASE = "merge-base"
+    COMMIT = "commit"
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +123,7 @@ class Base:
     mode: BaseMode
     commit: str
     label: str
-    """What the reader knows the base by: `HEAD`, or the default branch the merge base is with."""
+    """What the reader knows the base by: `HEAD`, the default branch the merge base is with, or a picked commit's hash."""
 
     @property
     def short(self) -> str:

@@ -5,7 +5,9 @@ They're configuration rather than data, so they live under `$XDG_CONFIG_HOME`.
 
 from __future__ import annotations
 
+import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -15,6 +17,9 @@ from pydantic import ConfigDict
 from pydantic import field_validator
 from pygments.styles import get_all_styles
 
+from assess_diff.migration import Migration
+from assess_diff.migration import migrated
+from assess_diff.navigation import Scope
 from assess_diff.navigation import ViewMode
 
 DEFAULT_THEME = "github-dark"
@@ -28,8 +33,9 @@ def themes() -> tuple[str, ...]:
 class Preferences(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    version: Literal[1]
+    version: Literal[2]
     view_mode: ViewMode
+    scope: Scope
     theme: str
 
     @field_validator("theme")
@@ -41,7 +47,34 @@ class Preferences(BaseModel):
 
     @classmethod
     def defaults(cls) -> Preferences:
-        return cls(version=1, view_mode=ViewMode.UNIFIED, theme=DEFAULT_THEME)
+        return cls(version=CURRENT_VERSION, view_mode=ViewMode.UNIFIED, scope=Scope.CONTEXT, theme=DEFAULT_THEME)
+
+
+CURRENT_VERSION = 2
+
+
+def from_version_1(document: Mapping[str, object]) -> dict[str, object]:
+    """Version 2 adds `scope`, which a version 1 file takes at its default: hunks and their context."""
+    # A literal rather than `Scope.CONTEXT`, so a version 1 file migrates the same however `Scope` changes.
+    return {**document, "version": 2, "scope": "context"}
+
+
+# Each version's migration to the next, by the version it migrates from.
+MIGRATIONS: Mapping[int, Migration] = {1: from_version_1}
+
+
+def parse_preferences(content: bytes) -> Preferences:
+    """
+    Preferences from a file's content, migrated to the current version if an older one wrote it.
+
+    Raises:
+        UnknownVersion: If a newer version wrote it, or it has no version.
+        pydantic.ValidationError: If it isn't a JSON object, or has a field missing or malformed.
+    """
+    document = json.loads(content)
+    if isinstance(document, dict):
+        document = migrated(document, MIGRATIONS, CURRENT_VERSION)
+    return Preferences.model_validate(document)
 
 
 def preferences_path(config_home: Path | None) -> Path:
@@ -57,7 +90,7 @@ class PreferencesFile:
         """The saved preferences, or the defaults if none have been saved yet."""
         if not self.path.exists():
             return Preferences.defaults()
-        return Preferences.model_validate_json(self.path.read_bytes())
+        return parse_preferences(self.path.read_bytes())
 
     def save(self, preferences: Preferences) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

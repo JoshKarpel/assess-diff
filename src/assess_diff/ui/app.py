@@ -41,11 +41,13 @@ from counterweight.keys import Key
 from counterweight.styles.utilities import *
 from watchfiles import awatch
 
+from assess_diff.diff import Base
 from assess_diff.diff import BaseMode
 from assess_diff.diff import Diff
 from assess_diff.export import to_markdown
 from assess_diff.git import GitError
 from assess_diff.git import Repository
+from assess_diff.git import branch_history
 from assess_diff.git import compute_diff
 from assess_diff.git import is_watched
 from assess_diff.git import relevant_batches
@@ -55,12 +57,13 @@ from assess_diff.navigation import Document
 from assess_diff.navigation import HeaderAt
 from assess_diff.navigation import Position
 from assess_diff.navigation import RowAt
+from assess_diff.navigation import Scope
 from assess_diff.navigation import SummaryAt
 from assess_diff.navigation import ViewMode
+from assess_diff.navigation import after_deleting
 from assess_diff.navigation import build_document
-from assess_diff.navigation import comment_row
 from assess_diff.navigation import extended
-from assess_diff.navigation import in_mode
+from assess_diff.navigation import in_view
 from assess_diff.navigation import moved
 from assess_diff.navigation import next_comment
 from assess_diff.navigation import next_stop
@@ -68,11 +71,12 @@ from assess_diff.navigation import placements
 from assess_diff.navigation import primary
 from assess_diff.navigation import recovered
 from assess_diff.navigation import recovered_selection
-from assess_diff.navigation import row_lines
+from assess_diff.navigation import selected_lines
 from assess_diff.navigation import selection_span
 from assess_diff.preferences import Preferences
 from assess_diff.preferences import PreferencesFile
 from assess_diff.preferences import themes
+from assess_diff.review import BaseChoice
 from assess_diff.review import FileAnchor
 from assess_diff.review import Review
 from assess_diff.review import add_comment
@@ -90,6 +94,7 @@ from assess_diff.storage import Listing
 from assess_diff.storage import OpenReview
 from assess_diff.storage import Unreadable
 from assess_diff.storage import for_project
+from assess_diff.ui.base_picker import base_picker
 from assess_diff.ui.comment_jump import comment_jump
 from assess_diff.ui.comment_jump import wanted
 from assess_diff.ui.diff_view import Actions
@@ -106,7 +111,6 @@ from assess_diff.ui.review_manager import review_manager
 from assess_diff.ui.text_search import shown_for
 from assess_diff.ui.text_search import text_search
 from assess_diff.ui.theme_picker import Query
-from assess_diff.ui.theme_picker import highlighted_theme
 from assess_diff.ui.theme_picker import theme_picker
 
 # How long the watcher waits for a burst of changes to settle before the diff is recomputed.
@@ -123,6 +127,8 @@ class Session:
     """The number of the comment being edited, or `None` for the summary, with its editor's focus handle."""
     confirming_delete: int | None
     picking_theme: PickingTheme | None
+    picking_base: FocusHandle | None
+    """The base picker's focus handle, while it's open."""
     managing: Managing | None
     naming: Naming | None
     jumping: Jumping | None
@@ -191,6 +197,7 @@ INITIAL_SESSION = Session(
     editing=None,
     confirming_delete=None,
     picking_theme=None,
+    picking_base=None,
     managing=None,
     naming=None,
     jumping=None,
@@ -203,8 +210,8 @@ def other_mode(mode: ViewMode) -> ViewMode:
     return ViewMode.SPLIT if mode is ViewMode.UNIFIED else ViewMode.UNIFIED
 
 
-def other_base(mode: BaseMode) -> BaseMode:
-    return BaseMode.HEAD if mode is BaseMode.MERGE_BASE else BaseMode.MERGE_BASE
+def other_scope(scope: Scope) -> Scope:
+    return Scope.WHOLE if scope is Scope.CONTEXT else Scope.CONTEXT
 
 
 def copied(review: Review, document: Document | None) -> tuple[str, CopyToClipboard | None]:
@@ -264,16 +271,24 @@ def name_field(
     )
 
 
+def against_base(base: Base) -> str:
+    """What the status line says the diff is against."""
+    match base.mode:
+        case BaseMode.HEAD:
+            return f"against HEAD {base.short}"
+        case BaseMode.MERGE_BASE:
+            return f"against {base.label} (merge base {base.short})"
+        case BaseMode.COMMIT:
+            return f"against commit {base.short}"
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 def status_line(review: Review, diff: Diff | None, mode: ViewMode) -> tuple[tuple[Chunk, ...], ...]:
     """Everything the status line says after the review's name, in the groups it wraps between."""
     branch = review.branch or "detached HEAD"
     comments = len(review.comments)
-    if diff is None:
-        against = "reading the diff…"
-    elif diff.base.mode is BaseMode.HEAD:
-        against = f"against HEAD {diff.base.short}"
-    else:
-        against = f"against {diff.base.label} (merge base {diff.base.short})"
+    against = "reading the diff…" if diff is None else against_base(diff.base)
     files = (
         ()
         if diff is None
@@ -294,10 +309,11 @@ def status_line(review: Review, diff: Diff | None, mode: ViewMode) -> tuple[tupl
     )
 
 
-def key_hints(session: Session, are_keys_shown: bool) -> tuple[str, ...]:
+def key_hints(session: Session, scope: Scope, are_keys_shown: bool) -> tuple[str, ...]:
     """
     The keys of what has focus, each with what it does; the diff's are folded away unless `are_keys_shown`,
     but a dialog's or a confirmation's always show.
+    `z`'s says what it would do from `scope`: unfold the unchanged lines it hides, or fold them away.
     """
     if session.naming is not None:
         return ("enter rename", "esc keep the old name")
@@ -309,6 +325,8 @@ def key_hints(session: Session, are_keys_shown: bool) -> tuple[str, ...]:
         return ("↑↓ choose", "enter open", "e rename", "dd delete", "esc close")
     if session.picking_theme is not None:
         return ("type to filter", "↑↓ preview", "enter keep", "esc revert")
+    if session.picking_base is not None:
+        return ("↑↓ choose", "enter compare with it", "esc close")
     if session.editing is not None:
         return ("esc done",)
     if session.confirming_delete is not None:
@@ -327,6 +345,7 @@ def key_hints(session: Session, are_keys_shown: bool) -> tuple[str, ...]:
         "r summary",
         "e rename",
         "s split",
+        "z unfold unchanged" if scope is Scope.CONTEXT else "z fold unchanged",
         "b base",
         "t theme",
         "f files",
@@ -359,7 +378,6 @@ def assess_app(
     review, set_review = use_state(open_review.review)
     preferences, set_preferences = use_state(initial_preferences)
     no_notice: str | None = None
-    base_mode, set_base_mode = use_state(review.base_mode if target is not None else BaseMode.HEAD)
     diff, set_diff = use_state(initial_diff)
     session, set_session = use_state(INITIAL_SESSION)
     # Apart from the session, so they stay as they are when another review opens.
@@ -377,7 +395,7 @@ def assess_app(
     async def follow_diff() -> None:
         async def refresh() -> None:
             try:
-                base = await resolve_base(repository, base_mode, target or "HEAD")
+                base = await resolve_base(repository, review.base, target)
                 set_diff(await compute_diff(repository, base))
             except GitError as error:
                 set_git_error(str(error))
@@ -397,14 +415,15 @@ def assess_app(
         async for _ in relevant_batches(repository, batches):
             await refresh()
 
-    use_effect(follow_diff, deps=(base_mode,))
+    use_effect(follow_diff, deps=(review.base,))
 
     mode = preferences.view_mode
+    scope = preferences.scope
     picking = session.picking_theme
-    theme = (highlighted_theme(themes(), picking.query) if picking is not None else None) or preferences.theme
+    theme = (picking.query.highlighted(themes()) if picking is not None else None) or preferences.theme
     document = use_memo(
-        lambda: None if diff is None else build_document(diff, review.comments, mode),
-        (diff, placements(review.comments), mode),
+        lambda: None if diff is None else build_document(diff, review.comments, mode, scope),
+        (diff, placements(review.comments), mode, scope),
     )
     outdated = use_memo(
         lambda: frozenset(
@@ -461,7 +480,7 @@ def assess_app(
             number = editing[0]
             comment = open_review.review.comment(number)
             if comment is not None and not comment.body.strip():
-                set_session(lambda s: replace(s, cursor=comment_row(document, number)))
+                set_session(lambda s: replace(s, cursor=after_deleting(document, number, review.comments)))
                 update_review(lambda r: delete_comment(r, number))
         return FocusOn(diff_focus), ScrollIntoView(cursor_element, block="nearest")
 
@@ -499,7 +518,7 @@ def assess_app(
         layout = document.layout_of(row)
         started = selection or row
         side = primary(layout.rows[started.index]).side
-        lines = tuple(line for row in layout.rows[first_row : last_row + 1] for line in row_lines(row))
+        lines = selected_lines(layout, first_row, last_row)
         anchor, excerpt = anchor_for(layout.file, lines, side, document.diff.base.commit)
         number = open_review.review.next_number
         update_review(lambda r: add_comment(r, anchor, excerpt, open_review.now()))
@@ -570,7 +589,11 @@ def assess_app(
             case KeyPressed(key="d") if isinstance(cursor, CommentAt):
                 number = cursor.number
                 if confirming == number:
-                    set_session(lambda s: replace(s, cursor=comment_row(document, number), confirming_delete=None))
+                    set_session(
+                        lambda s: replace(
+                            s, cursor=after_deleting(document, number, review.comments), confirming_delete=None
+                        )
+                    )
                     update_review(lambda r: delete_comment(r, number))
                 else:
                     set_session(lambda s: replace(s, confirming_delete=number))
@@ -604,7 +627,7 @@ def assess_app(
             )
         )
         # A closed picker has nothing typed in it.
-        return Query(text="", highlighted=0) if settled.picking_theme is None else settled.picking_theme.query
+        return Query() if settled.picking_theme is None else settled.picking_theme.query
 
     def project_listing() -> Listing:
         """The store as the review manager lists it: this project's reviews, and every file that can't be read."""
@@ -614,7 +637,6 @@ def assess_app(
     def show_review(review: Review, digest: str | None) -> InputResponse:
         open_review.switch(review, digest)
         set_review(review)
-        set_base_mode(review.base_mode if target is not None else BaseMode.HEAD)
         set_session(INITIAL_SESSION)
         return FocusOn(diff_focus)
 
@@ -624,7 +646,7 @@ def assess_app(
             repository.common_dir,
             repository.worktree,
             repository.branch,
-            base_mode,
+            review.base,
             open_review.now(),
         )
         return show_review(started, None)
@@ -651,6 +673,14 @@ def assess_app(
             set_session(lambda s: replace(s, managing=managing))
         listed = project_listing()
         set_session(lambda s: s if s.managing is None else replace(s, managing=replace(s.managing, listing=listed)))
+
+    def choose_base(chosen: BaseChoice) -> InputResponse:
+        update_review(lambda r: r.model_copy(update={"base": chosen}))
+        return close_base_picker()
+
+    def close_base_picker() -> InputResponse:
+        set_session(lambda s: replace(s, picking_base=None))
+        return FocusOn(diff_focus)
 
     def close_manager() -> InputResponse:
         set_session(lambda s: replace(s, managing=None))
@@ -743,7 +773,11 @@ def assess_app(
 
     def return_to_diff() -> InputResponse:
         """Focus the diff, closing any dialog and finishing any edit on the way, so nothing is left open unfocused."""
-        set_session(lambda s: replace(s, picking_theme=None, managing=None, naming=None, jumping=None, searching=None))
+        set_session(
+            lambda s: replace(
+                s, picking_theme=None, picking_base=None, managing=None, naming=None, jumping=None, searching=None
+            )
+        )
         if session.editing is not None:
             return finish_editing()
         return FocusOn(diff_focus)
@@ -767,21 +801,23 @@ def assess_app(
                 return FocusOn(handle)
             case KeyPressed(key="s"):
                 new_mode = other_mode(mode)
-                moved_cursor = in_mode(document, cursor, review.comments, new_mode)
+                moved_cursor = in_view(document, cursor, review.comments, new_mode, scope)
                 set_session(lambda s: replace(s, cursor=moved_cursor, selection=None))
                 save_preferences(preferences.model_copy(update={"view_mode": new_mode}))
                 return ScrollIntoView(cursor_element, block="center")
+            case KeyPressed(key="z"):
+                new_scope = other_scope(scope)
+                moved_cursor = in_view(document, cursor, review.comments, mode, new_scope)
+                set_session(lambda s: replace(s, cursor=moved_cursor, selection=None))
+                save_preferences(preferences.model_copy(update={"scope": new_scope}))
+                return ScrollIntoView(cursor_element, block="center")
             case KeyPressed(key="b"):
-                if target is None:
-                    set_notice("No branch to take a merge base with; pass one with --base")
-                    return ()
-                new_base = other_base(base_mode)
-                set_base_mode(new_base)
-                update_review(lambda r: r.model_copy(update={"base_mode": new_base}))
-                return ()
+                handle = session.picking_base or FocusHandle()
+                set_session(lambda s: replace(s, picking_base=handle))
+                return FocusOn(handle)
             case KeyPressed(key="t"):
                 handle = session.picking_theme.handle if session.picking_theme is not None else FocusHandle()
-                opened = PickingTheme(handle, Query.at(themes(), preferences.theme))
+                opened = PickingTheme(handle, Query(highlight=Highlight(key=preferences.theme)))
                 set_session(lambda s: replace(s, picking_theme=opened))
                 return FocusOn(handle)
             case KeyPressed(key="e"):
@@ -813,7 +849,7 @@ def assess_app(
     comment_counts = tuple(
         sum(comment.anchor.path == file.path for comment in review.comments) for file in picker_files
     )
-    hints = key_hints(session, are_keys_shown)
+    hints = key_hints(session, scope, are_keys_shown)
 
     return Div(
         style=col,
@@ -885,6 +921,20 @@ def assess_app(
             *(
                 (theme_picker(themes(), picking.query, set_query, picking.handle, choose_theme, cancel_theme),)
                 if picking is not None
+                else ()
+            ),
+            *(
+                (
+                    base_picker(
+                        lambda: branch_history(repository, target),
+                        target,
+                        None if diff is None else diff.base.commit,
+                        session.picking_base,
+                        choose_base,
+                        close_base_picker,
+                    ),
+                )
+                if session.picking_base is not None
                 else ()
             ),
             *(

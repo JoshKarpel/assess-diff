@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import AsyncIterator
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -13,7 +15,10 @@ from assess_diff.diff import BaseMode
 from assess_diff.diff import FileStatus
 from assess_diff.diff import LineKind
 from assess_diff.git import MAX_FILE_BYTES
+from assess_diff.git import Commit
 from assess_diff.git import GitError
+from assess_diff.git import History
+from assess_diff.git import branch_history
 from assess_diff.git import changes_matter
 from assess_diff.git import compute_diff
 from assess_diff.git import default_branch
@@ -21,9 +26,13 @@ from assess_diff.git import find_repository
 from assess_diff.git import git
 from assess_diff.git import ignored
 from assess_diff.git import is_watched
+from assess_diff.git import parse_log
 from assess_diff.git import read_lines
 from assess_diff.git import relevant_batches
 from assess_diff.git import resolve_base
+from assess_diff.review import FOLLOW_HEAD
+from assess_diff.review import FOLLOW_MERGE_BASE
+from assess_diff.review import pinned
 from tests.conftest import Scratch
 from tests.conftest import init_scratch
 
@@ -125,7 +134,7 @@ async def test_head_base_is_the_last_commit(scratch: Scratch) -> None:
     last = scratch.commit("last")
     repository = await find_repository(scratch.root)
 
-    assert await resolve_base(repository, BaseMode.HEAD, "trunk") == Base(mode=BaseMode.HEAD, commit=last, label="HEAD")
+    assert await resolve_base(repository, FOLLOW_HEAD, "trunk") == Base(mode=BaseMode.HEAD, commit=last, label="HEAD")
 
 
 async def test_merge_base_is_where_the_branch_left_its_target(scratch: Scratch) -> None:
@@ -139,9 +148,142 @@ async def test_merge_base_is_where_the_branch_left_its_target(scratch: Scratch) 
     scratch.git("checkout", "--quiet", "feature")
     repository = await find_repository(scratch.root)
 
-    base = await resolve_base(repository, BaseMode.MERGE_BASE, "main")
+    base = await resolve_base(repository, FOLLOW_MERGE_BASE, "main")
 
     assert (base.mode, base.commit, base.label) == (BaseMode.MERGE_BASE, fork, "main")
+
+
+async def test_merge_base_without_a_target_is_head(scratch: Scratch) -> None:
+    last = scratch.commit("last")
+    repository = await find_repository(scratch.root)
+
+    assert await resolve_base(repository, FOLLOW_MERGE_BASE, None) == Base(BaseMode.HEAD, last, "HEAD")
+
+
+async def test_pinned_base_is_its_commit_as_head_moves(scratch: Scratch) -> None:
+    picked = scratch.commit("picked")
+    scratch.commit("later")
+    repository = await find_repository(scratch.root)
+
+    assert await resolve_base(repository, pinned(picked), "main") == Base(BaseMode.COMMIT, picked, picked[:7])
+
+
+async def test_pinned_base_that_is_gone_says_so(scratch: Scratch) -> None:
+    scratch.commit()
+    repository = await find_repository(scratch.root)
+
+    with pytest.raises(GitError, match=r"^The base commit 0123456 isn't in the repository any more; b picks another$"):
+        await resolve_base(repository, pinned("0123456789" * 4), "main")
+
+
+async def test_pinned_base_must_be_a_commit(scratch: Scratch) -> None:
+    scratch.write("a.txt", "a\n")
+    scratch.commit()
+    tree = scratch.git("rev-parse", "HEAD^{tree}").strip()
+    repository = await find_repository(scratch.root)
+
+    with pytest.raises(GitError, match="isn't in the repository"):
+        await resolve_base(repository, pinned(tree), "main")
+
+
+def subjects(history: History) -> list[str]:
+    return [commit.subject for commit in history.commits]
+
+
+async def test_branch_history_runs_from_head_back_to_the_merge_base(scratch: Scratch) -> None:
+    scratch.commit("before")
+    fork = scratch.commit("fork")
+    scratch.git("checkout", "--quiet", "-b", "feature")
+    scratch.commit("first")
+    second = scratch.commit("second")
+    scratch.git("checkout", "--quiet", "main")
+    scratch.commit("ahead on main")
+    scratch.git("checkout", "--quiet", "feature")
+
+    history = await branch_history(await find_repository(scratch.root), "main")
+
+    assert (subjects(history), history.commits[0].commit, history.merge_base) == (
+        ["second", "first", "fork"],
+        second,
+        fork,
+    )
+
+
+async def test_branch_history_follows_first_parents_past_a_merge_of_the_target(scratch: Scratch) -> None:
+    scratch.commit("fork")
+    scratch.git("checkout", "--quiet", "-b", "feature")
+    scratch.commit("first")
+    scratch.git("checkout", "--quiet", "main")
+    scratch.write("main.txt", "more\n")
+    scratch.commit("on main")
+    scratch.write("main.txt", "even more\n")
+    merged = scratch.commit("more on main")
+    scratch.git("checkout", "--quiet", "feature")
+    scratch.git("merge", "--quiet", "--no-edit", "main")
+    scratch.commit("after the merge")
+
+    history = await branch_history(await find_repository(scratch.root), "main")
+
+    assert (subjects(history), history.merge_base) == (
+        ["after the merge", "Merge branch 'main' into feature", "first", "more on main"],
+        merged,
+    )
+
+
+async def test_branch_history_on_the_target_itself_is_heads_recent_history(scratch: Scratch) -> None:
+    scratch.commit("one")
+    scratch.commit("two")
+    head = scratch.commit("three")
+
+    history = await branch_history(await find_repository(scratch.root), "main", limit=2)
+
+    assert (subjects(history), history.merge_base) == (["three", "two"], head)
+
+
+async def test_branch_history_without_a_target_is_heads_recent_history(scratch: Scratch) -> None:
+    scratch.commit("one")
+    scratch.commit("two")
+
+    history = await branch_history(await find_repository(scratch.root), None)
+
+    assert (subjects(history), history.merge_base) == (["two", "one"], None)
+
+
+async def test_branch_history_keeps_the_merge_base_past_the_limit(scratch: Scratch) -> None:
+    fork = scratch.commit("fork")
+    scratch.git("checkout", "--quiet", "-b", "feature")
+    for n in range(3):
+        scratch.commit(f"work {n}")
+
+    history = await branch_history(await find_repository(scratch.root), "main", limit=2)
+
+    assert (subjects(history), history.commits[-1].commit) == (["work 2", "work 1", "fork"], fork)
+
+
+async def test_branch_history_reads_each_commits_time_and_a_subject_with_spaces(
+    scratch: Scratch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scratch.commit("a subject  with spaces")
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "@1700000123 +0000")
+    scratch.commit("dated")
+
+    history = await branch_history(await find_repository(scratch.root), None)
+
+    assert (subjects(history), history.commits[0].committed) == (
+        ["dated", "a subject  with spaces"],
+        datetime(2023, 11, 14, 22, 15, 23, tzinfo=UTC),
+    )
+
+
+def test_parse_log_of_nothing_is_no_commits() -> None:
+    assert parse_log("") == ()
+
+
+def test_parse_log_reads_each_record() -> None:
+    assert parse_log("a" * 40 + "\x0010\x00one\x00" + "b" * 40 + "\x0020\x00\x00") == (
+        Commit("a" * 40, "one", datetime.fromtimestamp(10, UTC)),
+        Commit("b" * 40, "", datetime.fromtimestamp(20, UTC)),
+    )
 
 
 async def test_merge_base_diff_includes_the_branchs_commits(scratch: Scratch) -> None:
@@ -151,8 +293,8 @@ async def test_merge_base_diff_includes_the_branchs_commits(scratch: Scratch) ->
     scratch.commit("work")
     repository = await find_repository(scratch.root)
 
-    head = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))
-    branch = await compute_diff(repository, await resolve_base(repository, BaseMode.MERGE_BASE, "main"))
+    head = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))
+    branch = await compute_diff(repository, await resolve_base(repository, FOLLOW_MERGE_BASE, "main"))
 
     assert ([file.path for file in head.files], [file.path for file in branch.files]) == ([], ["committed.txt"])
 
@@ -163,7 +305,7 @@ async def test_compute_diff_sorts_files_by_path(scratch: Scratch) -> None:
     scratch.write("a.txt", "a\n")
     repository = await find_repository(scratch.root)
 
-    diff = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))
+    diff = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))
 
     assert [file.path for file in diff.files] == ["a.txt", "b.txt"]
 
@@ -173,7 +315,7 @@ async def test_untracked_binary_file_has_a_placeholder(scratch: Scratch) -> None
     scratch.write("blob.dat", b"\0\1")
     repository = await find_repository(scratch.root)
 
-    (file,) = (await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))).files
+    (file,) = (await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))).files
 
     assert (file.path, file.status, file.placeholder) == ("blob.dat", FileStatus.UNTRACKED, "Binary file")
 
@@ -184,7 +326,7 @@ async def test_modified_file_too_large_to_show_has_a_placeholder(scratch: Scratc
     scratch.write("big.txt", "x" * (MAX_FILE_BYTES + 1))
     repository = await find_repository(scratch.root)
 
-    (file,) = (await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))).files
+    (file,) = (await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))).files
 
     assert (file.status, file.placeholder) == (FileStatus.MODIFIED, "File too large to show")
 
@@ -230,7 +372,7 @@ async def test_a_moved_submodule_has_a_placeholder(scratch: Scratch, tmp_path: P
     add_submodule(scratch, tmp_path).commit("moved")
     repository = await find_repository(scratch.root)
 
-    (file,) = (await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))).files
+    (file,) = (await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))).files
 
     assert (file.path, file.status, file.placeholder) == ("sub", FileStatus.MODIFIED, "Submodule or nested repository")
 
@@ -240,7 +382,7 @@ async def test_an_untracked_nested_repository_has_a_placeholder(scratch: Scratch
     init_scratch(scratch.root / "nested").commit()
     repository = await find_repository(scratch.root)
 
-    (file,) = (await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))).files
+    (file,) = (await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))).files
 
     assert (file.path, file.status, file.placeholder) == (
         "nested/",
@@ -257,7 +399,7 @@ async def test_diff_rows_ignore_a_textconv_driver(scratch: Scratch) -> None:
     scratch.write("f.txt", "keep\nnew\n")
     repository = await find_repository(scratch.root)
 
-    (file,) = (await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))).files
+    (file,) = (await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))).files
 
     assert [(line.kind, line.text) for line in file.lines] == [
         (LineKind.CONTEXT, "keep"),
@@ -288,7 +430,7 @@ async def test_compute_diff_is_unaffected_by_the_repositorys_diff_config(
     scratch.git("mv", "old.txt", "new.txt")
     repository = await find_repository(scratch.root)
 
-    diff = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))
+    diff = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))
 
     assert [
         (file.path, file.old_path, file.status, [(line.kind, line.text) for line in file.lines]) for file in diff.files
@@ -315,7 +457,7 @@ async def test_compute_diff_carries_on_past_binary_and_deleted_files(scratch: Sc
     scratch.write("d.txt", "untracked\n")
     repository = await find_repository(scratch.root)
 
-    diff = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))
+    diff = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))
 
     assert [(file.path, file.status, file.placeholder, file.additions, file.deletions) for file in diff.files] == [
         ("a.dat", FileStatus.MODIFIED, "Binary file", 0, 0),
@@ -333,7 +475,7 @@ async def test_compute_diff_keeps_a_path_that_is_not_utf8(scratch: Scratch) -> N
     scratch.write(path, "after\n")
     repository = await find_repository(scratch.root)
 
-    (file,) = (await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))).files
+    (file,) = (await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))).files
 
     assert (file.path, [(line.kind, line.text) for line in file.lines]) == (
         path,
@@ -433,7 +575,7 @@ async def test_untracked_files_respect_every_ignore_file(scratch: Scratch) -> No
         scratch.write(name, "x\n")
     repository = await find_repository(scratch.root)
 
-    diff = await compute_diff(repository, await resolve_base(repository, BaseMode.HEAD, "main"))
+    diff = await compute_diff(repository, await resolve_base(repository, FOLLOW_HEAD, "main"))
 
     assert [file.path for file in diff.files] == ["kept.txt"]
 

@@ -32,6 +32,11 @@ mutate *MUTANTS:
 bench *ARGS:
     uv run python -m benchmarks.keys "$@"
 
+[doc('Time laying out generated diffs in each view and scope, with comments and without, passing any arguments on (see --help)')]
+[positional-arguments]
+bench-layout *ARGS:
+    uv run python -m benchmarks.layout "$@"
+
 [doc('Profile one benchmark workload with the sampling profiler, writing a flamegraph to profiles/')]
 profile WORKLOAD="large/down":
     mkdir -p profiles
