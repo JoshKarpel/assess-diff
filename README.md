@@ -19,7 +19,7 @@ It's built on [counterweight](https://www.counterweight.dev/).
 
 ```bash
 uv tool install assess-diff
-assess-diff              # review this worktree's changes since HEAD (b switches to the merge base)
+assess-diff              # review this worktree's changes since HEAD (b picks another base)
 assess-diff --base main  # review them against the merge base with main
 assess-diff --help       # the other commands: list, show, delete
 ```
@@ -30,10 +30,15 @@ click a line to move there (Shift+click to select), a comment to edit it, a file
 
 ## Reviewing
 
-The diff is against `HEAD`, the change since the last commit,
-or, with `b`, against the merge base with the default branch, the whole branch as a pull request would show it.
+The diff is against `HEAD`, the change since the last commit, until you pick another base with `b`.
+The picker lists the branch's commits under the working tree, back to the merge base with the default branch,
+with a line from the working tree down to the highlighted commit, the diff's two ends.
+The merge base shows the whole branch as a pull request would, and moves as the default branch is merged in;
+`HEAD` follows each commit, so the diff shows only what's uncommitted;
+any other commit stays put as the agent commits, so the diff keeps everything since it.
+On the default branch itself, or with none, the picker lists `HEAD`'s recent history instead.
 The default branch is what `origin/HEAD` points at, or else a local `main` or `master`;
-`--base` names another, and starts a new review on it.
+`--base` names another, and starts a new review against the merge base with it.
 A resumed review keeps the base it was last viewed against.
 
 Tab and Shift+Tab jump between hunks and comments, and `n` and `N` between comments alone.

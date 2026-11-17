@@ -59,6 +59,12 @@ def test_markdown_against_head_and_a_detached_head() -> None:
     assert markdown == "# Review of detached `HEAD` against `HEAD` (`c0ffee0`)\n"
 
 
+def test_markdown_against_a_pinned_commit() -> None:
+    markdown = to_markdown(review(), diff_of(FILE, mode=BaseMode.COMMIT, label="c0ffee0"))
+
+    assert markdown == "# Review of `feature/x` against commit `c0ffee0`\n"
+
+
 def test_markdown_names_a_range_and_marks_outdated_comments() -> None:
     stale = comment(3, "src/app.py", 1, 2, ((LineKind.ADDED, "gone"),), body="Stale.")
 

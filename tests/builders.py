@@ -14,6 +14,7 @@ from assess_diff.diff import FileStatus
 from assess_diff.diff import Line
 from assess_diff.diff import LineKind
 from assess_diff.diff import Side
+from assess_diff.review import FOLLOW_MERGE_BASE
 from assess_diff.review import Comment
 from assess_diff.review import ExcerptLine
 from assess_diff.review import FileAnchor
@@ -48,7 +49,7 @@ def diff_of(*files: FileDiff, mode: BaseMode = BaseMode.MERGE_BASE, label: str =
 
 def review(*comments: Comment, summary: str = "", branch: str | None = "feature/x") -> Review:
     started = Review.start(
-        "0199aaaa-review", Path("/work/repo/.git"), Path("/work/repo"), branch, BaseMode.MERGE_BASE, STARTED
+        "0199aaaa-review", Path("/work/repo/.git"), Path("/work/repo"), branch, FOLLOW_MERGE_BASE, STARTED
     )
     next_number = max((comment.number for comment in comments), default=0) + 1
     return started.model_copy(update={"comments": comments, "summary": summary, "next_number": next_number})

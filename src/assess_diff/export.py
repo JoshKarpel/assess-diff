@@ -40,6 +40,8 @@ def heading(review: Review, diff: Diff) -> str:
             against = f"`HEAD` (`{base.short}`)"
         case BaseMode.MERGE_BASE:
             against = f"`{base.label}` (merge base `{base.short}`)"
+        case BaseMode.COMMIT:
+            against = f"commit `{base.short}`"
         case _ as unreachable:
             assert_never(unreachable)
     return f"# Review of {branch} against {against}"

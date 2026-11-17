@@ -31,8 +31,10 @@ from counterweight.handlers import first
 from counterweight.handlers import focus_receiver_on_press
 from counterweight.handlers import on_click
 from counterweight.handlers import scroll_on_wheel
+from counterweight.headless import Highlight
 from counterweight.headless import use_text_input
 from counterweight.hooks import Editor
+from counterweight.hooks import get_state
 from counterweight.hooks import use_effect
 from counterweight.hooks import use_focus
 from counterweight.hooks import use_memo
@@ -50,7 +52,6 @@ from assess_diff.navigation import RowAt
 from assess_diff.navigation import SummaryAt
 from assess_diff.review import Review
 from assess_diff.ui.theme_picker import Query
-from assess_diff.ui.theme_picker import matches
 
 STATUS_LETTERS = {
     FileStatus.ADDED: "A",
@@ -174,6 +175,22 @@ def marked(cursor: Position, review: Review) -> HeaderAt | SummaryAt | None:
             assert_never(unreachable)
 
 
+def row_key(row: PickerRow, paths: Sequence[str]) -> object:
+    """
+    What the tree's highlight holds a row by, so it stays on its row as files come and go above it:
+    the summary's row itself, and a file's or a directory's path, which no file and directory share.
+    """
+    match row:
+        case SummaryRow():
+            return row
+        case FileRow(index=index):
+            return paths[index]
+        case DirectoryRow(path=path):
+            return path
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 @dataclass(frozen=True, slots=True)
 class Filtering:
     """The picker is narrowed to the files matching what's typed: its field's focus handle, and the query."""
@@ -196,20 +213,25 @@ def file_picker(
     Enter or a press on a directory folds it or unfolds it, as Left and Right do.
     """
     focus = use_focus(handle=handle, in_focus_order=False)
-    highlighted, set_highlighted = use_state(0)
+    highlight, set_highlight = use_state(Highlight())
     highlighted_entry, _ = use_state(ElementHandle)
     folded, set_folded = use_state(frozenset[str]())
     not_filtering: Filtering | None = None
     filtering, set_filtering = use_state(not_filtering)
     paths = use_memo(lambda: tuple(file.path for file in files), (files,))
     rows: tuple[PickerRow, ...] = use_memo(lambda: (SummaryRow(), *tree_rows(paths, folded)), (paths, folded))
-    shown = min(highlighted, len(rows) - 1)
+
+    def key(row: PickerRow) -> object:
+        return row_key(row, paths)
+
+    # `index_in` is `None` only with no rows, and the summary's is always there.
+    shown = highlight.index_in(rows, key) or 0
 
     def toggle(directory: DirectoryRow, is_folded: bool) -> None:
         set_folded(lambda f: f | {directory.path} if is_folded else f - {directory.path})
 
     def press(index: int, row: PickerRow) -> InputResponse:
-        set_highlighted(index)
+        set_highlight(Highlight(key=key(row), index=index))
         match row:
             case SummaryRow():
                 return jump(SummaryAt())
@@ -225,17 +247,19 @@ def file_picker(
         # Only the tree's own keys: those the filter's field leaves alone bubble past it.
         if not receiver.is_target:
             return None
-        row = rows[shown]
+        # Several keys can arrive before the next render, so the keys that act on a row act on the latest highlight's.
+        at = get_state(set_highlight).index_in(rows, key) or 0
+        row = rows[at]
         in_view = ScrollIntoView(highlighted_entry, block="nearest")
         match event:
             case KeyPressed(key=Key.Down | "j"):
-                set_highlighted(lambda index: min(index + 1, len(rows) - 1))
+                set_highlight(lambda h: h.moved(rows, 1, key, ends="stop"))
                 return in_view
             case KeyPressed(key=Key.Up | "k"):
-                set_highlighted(lambda index: max(min(index, len(rows) - 1) - 1, 0))
+                set_highlight(lambda h: h.moved(rows, -1, key, ends="stop"))
                 return in_view
             case KeyPressed(key=Key.Enter):
-                return press(shown, row)
+                return press(at, row)
             case KeyPressed(key=Key.Left | "h") if isinstance(row, DirectoryRow):
                 toggle(row, True)
                 return ()
@@ -243,7 +267,7 @@ def file_picker(
                 toggle(row, False)
                 return ()
             case KeyPressed(key="/"):
-                opened = Filtering(FocusHandle(), Query(text="", highlighted=0))
+                opened = Filtering(FocusHandle(), Query())
                 set_filtering(opened)
                 return FocusOn(opened.handle)
             case _:
@@ -279,7 +303,7 @@ def file_picker(
     def set_query(edit: Callable[[Query], Query]) -> Query:
         settled = set_filtering(lambda f: f if f is None else replace(f, query=edit(f.query)))
         # A closed filter has nothing typed in it.
-        return Query(text="", highlighted=0) if settled is None else settled.query
+        return Query() if settled is None else settled.query
 
     return Div(
         style=col
@@ -338,7 +362,8 @@ def filter_list(
         return set_query(lambda q: q.edited(edit_text(q.text))).text
 
     field = use_text_input(query.text, edit, handle=filtering.handle)
-    shown = matches(query.text, paths)
+    shown = query.matches(paths)
+    highlighted = query.highlighted(paths)
     index_of = {path: index for index, path in enumerate(paths)}
 
     # The field mounts unfocused and takes focus a render later, so only losing focus it had closes the list.
@@ -351,11 +376,12 @@ def filter_list(
         in_view = ScrollIntoView(highlighted_match, block="nearest")
         match event:
             case KeyPressed(key=Key.Down) if shown:
-                set_query(lambda q: replace(q, highlighted=(q.highlighted + 1) % len(shown)))
+                set_query(lambda q: q.moved(paths, 1))
             case KeyPressed(key=Key.Up) if shown:
-                set_query(lambda q: replace(q, highlighted=(q.highlighted - 1) % len(shown)))
-            case KeyPressed(key=Key.Enter) if shown:
-                return jump(HeaderAt(shown[query.highlighted]))
+                set_query(lambda q: q.moved(paths, -1))
+            # Several keys can arrive before the next render, so Enter jumps to what the latest of them left highlighted.
+            case KeyPressed(key=Key.Enter) if (path := get_state(set_query).highlighted(paths)) is not None:
+                return jump(HeaderAt(path))
             case KeyPressed(key=Key.Escape):
                 dismiss()
                 return back()
@@ -386,13 +412,11 @@ def filter_list(
                 children=tuple(
                     Text(
                         content=file_entry(files[index_of[path]], path, comment_counts[index_of[path]]),
-                        style=text_wrap_none
-                        | pad_x(1)
-                        | (text_bg("indigo", 800) if index == query.highlighted else default),
-                        handle=highlighted_match if index == query.highlighted else None,
+                        style=text_wrap_none | pad_x(1) | (text_bg("indigo", 800) if path == highlighted else default),
+                        handle=highlighted_match if path == highlighted else None,
                         on_input=on_click(partial(jump, HeaderAt(path))),
                     )
-                    for index, path in enumerate(shown)
+                    for path in shown
                 )
                 or (Text(content="No file matches", style=pad_x(1) | text_color("slate", 500)),),
             ),
