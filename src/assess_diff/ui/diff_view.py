@@ -564,10 +564,13 @@ def diff_pane(
     cursor_element: ElementHandle,
     actions: Actions,
     on_key: InputHandler,
+    room_below: int,
 ) -> Div:
     """
     The scrolling pane of the whole review. `editing` is the number of the comment being edited,
     or `None` for the summary, which is edited in a dialog rather than here, with the editor's focus handle.
+    `room_below` is how many blank rows follow everything, so a row near the end can still scroll up
+    to where a dialog docked below leaves it in view.
     """
     use_focus(handle=handle, auto_focus=True)
     rects = use_rects()
@@ -661,5 +664,5 @@ def diff_pane(
         # `on_key` sees every key first, sideways ones included, since it disarms a pending delete on any but `d`;
         # it handles none of the keys `scroll_sideways` does, so they carry on to it.
         on_input=first(on_key, scroll_sideways, scroll_on_wheel()),
-        children=(top, *files, *orphans),
+        children=(top, *files, *orphans, *((Div(style=height(room_below) | shrink(0)),) if room_below else ())),
     )

@@ -42,6 +42,9 @@ The default branch is what `origin/HEAD` points at, or else a local `main` or `m
 A resumed review keeps the base it was last viewed against.
 
 Tab and Shift+Tab jump between hunks and comments, and `n` and `N` between comments alone.
+`/` finds text in the diff, such as a name: it lists the lines holding what you type, from where the cursor is,
+and the diff behind it shows each as you choose it, going there on Enter and back where it was on Escape.
+It ignores case unless what you type has a capital letter, and `/` again returns to what you typed last.
 Left and Right (or `h` and `l`, a sideways swipe, or Shift and the wheel) scroll long lines sideways,
 keeping the line numbers in place, and `0` scrolls back to the start.
 The file picker on the left (`f`) jumps to a file, or to the summary from its entry at the top,

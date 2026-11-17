@@ -9,8 +9,12 @@ import pytest
 from counterweight.autopilot import WaitFor
 from counterweight.controls import CopyToClipboard
 from counterweight.elements import Chunk
+from counterweight.events import InputEvent
 from counterweight.events import KeyPressed
+from counterweight.events import MouseScrolledDown
+from counterweight.events import MouseScrolledUp
 from counterweight.focus import FocusHandle
+from counterweight.geometry import Position
 from counterweight.headless import Highlight
 from counterweight.keys import Key
 from counterweight.styles.utilities import text_bg
@@ -25,6 +29,7 @@ from assess_diff.export import to_markdown
 from assess_diff.git import compute_diff
 from assess_diff.git import find_repository
 from assess_diff.git import resolve_base
+from assess_diff.navigation import RowAt
 from assess_diff.navigation import Scope
 from assess_diff.navigation import ViewMode
 from assess_diff.navigation import build_document
@@ -41,6 +46,8 @@ from assess_diff.review import Review
 from assess_diff.review import edit_summary
 from assess_diff.review import is_outdated
 from assess_diff.review import pinned
+from assess_diff.search import Match
+from assess_diff.search import match_key
 from assess_diff.storage import Listing
 from assess_diff.storage import OpenReview
 from assess_diff.storage import ReviewStore
@@ -50,6 +57,7 @@ from assess_diff.ui.app import Jumping
 from assess_diff.ui.app import Managing
 from assess_diff.ui.app import Naming
 from assess_diff.ui.app import PickingTheme
+from assess_diff.ui.app import Searching
 from assess_diff.ui.app import Session
 from assess_diff.ui.app import copied
 from assess_diff.ui.app import key_hints
@@ -243,6 +251,162 @@ async def test_hash_with_go_to_comment_left_open_carries_on_with_what_was_typed(
     await harness.run([*keys("#"), *typed("1"), *click(row.x, row.y), *keys("#"), ENTER, ENTER, *typed("!"), ESCAPE])
 
     assert [c.body for c in harness.review().comments] == ["one!", "two\nmore"]
+
+
+async def test_slash_then_text_and_enter_goes_to_the_line_holding_it(harness: Harness) -> None:
+    await harness.run([*keys("/"), *typed("return 26"), ENTER, harness.shot(), ENTER, *typed("why?"), ESCAPE])
+
+    assert "Find text" not in harness.frames[0]
+    (made,) = harness.review().comments
+    assert (lines(made).side, lines(made).start, made.body) == (Side.NEW, 41, "why?")
+
+
+async def test_find_text_lists_the_lines_holding_it_and_previews_the_first_in_the_diff(whole_harness: Harness) -> None:
+    harness = whole_harness
+    await harness.run([*keys("/"), harness.shot(), *typed("return 26"), harness.shot()])
+
+    assert "Type text to find, such as a name" in harness.frames[0]
+    assert "app.py:41 + return 26" in harness.frames[1]
+    # f26 returns 26 too, on line 80.
+    assert "1 of 2 lines" in harness.frames[1]
+    # The row in the diff, apart from the dialog's entry, shows above the dialog.
+    assert where(harness.frames[1], "41 +     return 26").y < where(harness.frames[1], "Find text").y
+
+
+async def test_find_text_previews_a_match_at_the_end_of_the_diff_above_the_dialog(harness: Harness) -> None:
+    await harness.run([*keys("/"), *typed("first"), harness.shot()])
+
+    assert where(harness.frames[0], "3 + first").y < where(harness.frames[0], "Find text").y
+
+
+async def test_find_text_says_when_no_line_holds_it_and_enter_stays(harness: Harness) -> None:
+    await harness.run([*keys("/"), *typed("zzz"), KeyPressed(key=Key.Down), ENTER, harness.shot(), ESCAPE])
+
+    assert "No line holds “zzz”" in harness.frames[0]
+    assert "Find text" in harness.frames[0]
+
+
+@pytest.mark.parametrize(
+    "choose",
+    [
+        [KeyPressed(key=Key.Down)],
+        [KeyPressed(key=Key.Up)],
+        [MouseScrolledDown(absolute=Position(10, HEIGHT - 6))],
+        [MouseScrolledUp(absolute=Position(10, HEIGHT - 6))],
+    ],
+    ids=["down", "up-wraps", "wheel-down", "wheel-up-wraps"],
+)
+async def test_find_text_moves_the_highlight_to_another_match(whole_harness: Harness, choose: list[InputEvent]) -> None:
+    harness = whole_harness
+    # `return 6` is on line 11, as changed, and on line 20, as it was.
+    await harness.run([*keys("/"), *typed("return 6"), *choose, harness.shot(), ENTER, ENTER, *typed("!"), ESCAPE])
+
+    assert "2 of 2 lines" in harness.frames[0]
+    assert lines(harness.review().comments[0]).start == 20
+
+
+TEN_FOUND = tuple(Match(at=RowAt("app.py", n), line=added(n + 1, "x"), start=0, stop=1) for n in range(10))
+
+
+@pytest.mark.parametrize(
+    ("chosen", "delta", "expected"),
+    [(None, 1, 4), (None, -1, 2), (6, 1, 7), (6, -1, 5), (9, 1, 0), (0, -1, 9)],
+    ids=["first-down", "first-up", "down", "up", "down-wraps", "up-wraps"],
+)
+def test_searching_moves_the_highlight_from_the_one_chosen_or_else_the_highlighted_one(
+    chosen: int | None, delta: int, expected: int
+) -> None:
+    searching = Searching(HANDLE, None if chosen is None else Highlight(index=chosen))
+
+    assert searching.moved(delta, 3, TEN_FOUND) == Searching(
+        HANDLE, Highlight(key=match_key(TEN_FOUND[expected]), index=expected)
+    )
+
+
+async def test_find_text_keeps_the_highlight_on_its_line_as_a_match_appears_before_it(whole_harness: Harness) -> None:
+    harness = whole_harness
+
+    def write_later(_: object) -> bool:
+        """Changes `return 1` to `return 6` too, on line 5, before both the matches, the same each time it's asked."""
+        harness.scratch.write("app.py", functions({1: 6, 3: 6, 13: 26}))
+        return True
+
+    write = WaitFor(write_later, timeout=timedelta(seconds=10))
+
+    # `return 6` is on line 11, as changed, and on line 20, as it was; Down chooses line 20.
+    await harness.run(
+        [
+            *keys("/"),
+            *typed("return 6"),
+            KeyPressed(key=Key.Down),
+            write,
+            showing("of 3 lines"),
+            harness.shot(),
+            *(ENTER, ENTER, *typed("!"), ESCAPE),
+        ]
+    )
+
+    assert "3 of 3 lines" in harness.frames[0]
+    assert lines(harness.review().comments[0]).start == 20
+
+
+async def test_find_text_reopens_with_the_last_text_from_the_match_the_cursor_is_on(whole_harness: Harness) -> None:
+    harness = whole_harness
+    await harness.run(
+        [
+            *keys("/"),
+            *typed("return 6"),
+            ENTER,
+            *keys("/"),
+            harness.shot(),
+            *keys(Key.Down),
+            ENTER,
+            *(ENTER, *typed("!"), ESCAPE),
+        ]
+    )
+
+    assert "1 of 2 lines" in harness.frames[0]
+    assert "/ return 6" in harness.frames[0]
+    assert lines(harness.review().comments[0]).start == 20
+
+
+@pytest.mark.parametrize("leave", [ESCAPE, TAB], ids=["escape", "tab"])
+async def test_leaving_find_text_puts_the_cursor_back_where_it_was(harness: Harness, leave: KeyPressed) -> None:
+    await harness.run([*keys("/"), *typed("return 26"), leave, harness.shot(), ENTER, *typed("s")])
+
+    assert "Find text" not in harness.frames[0]
+    # The preview scrolled the summary away, and the view comes back to it with the cursor.
+    assert "Review summary" in harness.frames[0]
+    assert harness.review().summary == "s"
+
+
+async def test_find_text_with_nothing_typed_leaves_the_view_where_it_is(whole_harness: Harness) -> None:
+    harness = whole_harness
+    await harness.run([*keys(Key.PageDown), harness.shot(), *keys("/"), harness.shot()])
+
+    assert where(harness.frames[1], " 30  30 ") == where(harness.frames[0], " 30  30 ")
+
+
+async def test_clicking_a_listed_match_goes_to_it(whole_harness: Harness) -> None:
+    harness = whole_harness
+    await harness.run([*keys("/"), *typed("return 6"), harness.shot()])
+    entry = where(harness.frames[0], "app.py:20")
+
+    await harness.run([*keys("/"), *typed("return 6"), *click(entry.x, entry.y), ENTER, *typed("!"), ESCAPE])
+
+    assert lines(harness.review().comments[0]).start == 20
+
+
+async def test_clicking_the_diff_closes_find_text_with_the_cursor_where_it_was_clicked(harness: Harness) -> None:
+    await harness.run([*keys("/"), *typed("return 6"), harness.shot()])
+    row = where(harness.frames[0], "def f3():")
+
+    await harness.run(
+        [*keys("/"), *typed("return 6"), *click(row.x, row.y), harness.shot(), ENTER, *typed("!"), ESCAPE]
+    )
+
+    assert "Find text" not in harness.frames[1]
+    assert lines(harness.review().comments[0]).start == 10
 
 
 async def test_shift_tab_goes_back_to_the_previous_stop(harness: Harness) -> None:
@@ -959,6 +1123,7 @@ def test_key_hints_list_the_diffs_keys() -> None:
         "tab hunk/comment",
         "n/N comment",
         "# go to #",
+        "/ find",
         "enter comment",
         "dd delete",
         "r summary",
@@ -1019,6 +1184,10 @@ def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
         (replace(INITIAL_SESSION, naming=Naming(HANDLE, "draft")), ("enter rename", "esc keep the old name")),
         (replace(INITIAL_SESSION, jumping=Jumping(HANDLE, "4")), ("type a number", "enter go", "esc close")),
         (
+            replace(INITIAL_SESSION, searching=Searching(HANDLE, None)),
+            ("type to find", "↑↓ preview", "enter go", "esc back"),
+        ),
+        (
             replace(INITIAL_SESSION, managing=Managing(HANDLE, Listing((), ()))),
             ("↑↓ choose", "enter open", "e rename", "dd delete", "esc close"),
         ),
@@ -1041,7 +1210,7 @@ def test_key_hints_folded_list_none_of_the_diffs_keys() -> None:
             ("press d again to delete #7", "anything else to keep it"),
         ),
     ],
-    ids=["naming", "jumping", "managing", "picking-theme", "picking-base", "editing", "confirming-delete"],
+    ids=["naming", "jumping", "searching", "managing", "picking-theme", "picking-base", "editing", "confirming-delete"],
 )
 def test_key_hints_list_the_keys_of_what_has_focus_even_folded(session: Session, hints: tuple[str, ...]) -> None:
     assert key_hints(session, Scope.CONTEXT, False) == hints
@@ -1078,7 +1247,7 @@ async def test_the_footer_wraps_between_hints_rather_than_cutting_them_off(harne
     await harness.run([harness.shot()])
 
     *_, first, middle, last = harness.frames[0].splitlines()
-    assert ("enter comment" in first, "c copy" in middle, last.split()[-2:]) == (True, True, ["q", "quit"])
+    assert ("enter comment" in first, "o reviews" in middle, last.split()[-2:]) == (True, True, ["q", "quit"])
 
 
 async def test_question_mark_folds_the_keys_away_and_back(harness: Harness) -> None:

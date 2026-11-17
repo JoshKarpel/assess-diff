@@ -35,6 +35,7 @@ from counterweight.headless import use_text_input
 from counterweight.hooks import Editor
 from counterweight.hooks import use_effect
 from counterweight.hooks import use_memo
+from counterweight.hooks import use_rects
 from counterweight.hooks import use_state
 from counterweight.keys import Key
 from counterweight.styles.utilities import *
@@ -85,6 +86,10 @@ from assess_diff.review import edit_comment
 from assess_diff.review import edit_summary
 from assess_diff.review import is_outdated
 from assess_diff.review import rename
+from assess_diff.search import Match
+from assess_diff.search import find
+from assess_diff.search import highlighted
+from assess_diff.search import match_key
 from assess_diff.storage import Listing
 from assess_diff.storage import OpenReview
 from assess_diff.storage import Unreadable
@@ -103,6 +108,8 @@ from assess_diff.ui.pills import key_pills
 from assess_diff.ui.pills import pills
 from assess_diff.ui.review_manager import ManagerActions
 from assess_diff.ui.review_manager import review_manager
+from assess_diff.ui.text_search import shown_for
+from assess_diff.ui.text_search import text_search
 from assess_diff.ui.theme_picker import Query
 from assess_diff.ui.theme_picker import theme_picker
 
@@ -125,6 +132,28 @@ class Session:
     managing: Managing | None
     naming: Naming | None
     jumping: Jumping | None
+    searching: Searching | None
+    search_query: str
+    """What's typed in the dialog to find text, kept once it closes, so `/` returns to it."""
+
+
+@dataclass(frozen=True, slots=True)
+class Searching:
+    """
+    The dialog to find text is open: its field's focus handle, and the match chosen with ↑↓,
+    which stays on its line as the diff changes, or `None` until one is, which highlights the first at or after the cursor.
+    """
+
+    handle: FocusHandle
+    chosen: Highlight | None
+
+    def moved(self, delta: int, highlighted: int, found: tuple[Match, ...]) -> Searching:
+        """
+        The highlight moved `delta` of `found` on, wrapping at either end,
+        from the one chosen, or with none chosen yet, from the `highlighted` one.
+        """
+        start = Highlight(index=highlighted) if self.chosen is None else self.chosen
+        return replace(self, chosen=start.moved(found, delta, match_key))
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +201,8 @@ INITIAL_SESSION = Session(
     managing=None,
     naming=None,
     jumping=None,
+    searching=None,
+    search_query="",
 )
 
 
@@ -288,6 +319,8 @@ def key_hints(session: Session, scope: Scope, are_keys_shown: bool) -> tuple[str
         return ("enter rename", "esc keep the old name")
     if session.jumping is not None:
         return ("type a number", "enter go", "esc close")
+    if session.searching is not None:
+        return ("type to find", "↑↓ preview", "enter go", "esc back")
     if session.managing is not None:
         return ("↑↓ choose", "enter open", "e rename", "dd delete", "esc close")
     if session.picking_theme is not None:
@@ -306,6 +339,7 @@ def key_hints(session: Session, scope: Scope, are_keys_shown: bool) -> tuple[str
         "tab hunk/comment",
         "n/N comment",
         "# go to #",
+        "/ find",
         "enter comment",
         "dd delete",
         "r summary",
@@ -355,6 +389,8 @@ def assess_app(
     diff_focus, _ = use_state(FocusHandle)
     picker_focus, _ = use_state(FocusHandle)
     cursor_element, _ = use_state(ElementHandle)
+    # The whole screen, which moves only as the terminal is resized.
+    screen_height = use_rects().content.height
 
     async def follow_diff() -> None:
         async def refresh() -> None:
@@ -395,8 +431,22 @@ def assess_app(
         ),
         (diff, review.comments),
     )
-    cursor = SummaryAt() if document is None else recovered(document, session.cursor)
-    selection = None if document is None else recovered_selection(document, cursor, session.selection)
+    searching = session.searching
+    found = use_memo(
+        lambda: () if document is None or searching is None else find(document, session.search_query),
+        (document, searching is not None, session.search_query),
+    )
+    # Where the cursor is, apart from where a search previews it, which it returns to if the search is cancelled.
+    origin = SummaryAt() if document is None else recovered(document, session.cursor)
+    shown_match = (
+        None if document is None or searching is None else highlighted(document, found, origin, searching.chosen)
+    )
+    cursor = origin if shown_match is None else found[shown_match].at
+    selection = (
+        None
+        if document is None or shown_match is not None
+        else recovered_selection(document, cursor, session.selection)
+    )
 
     def update_review(edit: Callable[[Review], Review]) -> Review:
         if (saved_notice := open_review.update(edit)) is not None:
@@ -682,10 +732,51 @@ def assess_app(
         set_session(lambda s: replace(s, jumping=None))
         return FocusOn(diff_focus)
 
+    def start_searching() -> InputResponse:
+        """Open the dialog to find text, with what was typed in it last, previewing its first match from the cursor."""
+        searching = session.searching or Searching(FocusHandle(), None)
+        set_session(lambda s: replace(s, searching=searching))
+        if not session.search_query:
+            # Nothing typed previews nothing, so the view stays as it is.
+            return FocusOn(searching.handle)
+        return FocusOn(searching.handle), ScrollIntoView(cursor_element, block="center")
+
+    def set_search_query(edit: Callable[[str], str]) -> str:
+        def edited(s: Session) -> Session:
+            query = edit(s.search_query)
+            if query == s.search_query:
+                return s
+            # A new query highlights its first match from the cursor again, whichever was chosen of the last one's.
+            searching = None if s.searching is None else replace(s.searching, chosen=None)
+            return replace(s, search_query=query, searching=searching)
+
+        return set_session(edited).search_query
+
+    def move_search(delta: int) -> None:
+        if shown_match is None:
+            return
+        start = shown_match
+        set_session(
+            lambda s: s if s.searching is None else replace(s, searching=s.searching.moved(delta, start, found))
+        )
+
+    def go_to_match(match: Match) -> InputResponse:
+        set_session(lambda s: replace(s, cursor=match.at, selection=None, confirming_delete=None, searching=None))
+        return FocusOn(diff_focus), ScrollIntoView(cursor_element, block="center")
+
+    def cancel_searching() -> InputResponse:
+        dismiss_search()
+        return FocusOn(diff_focus), ScrollIntoView(cursor_element, block="nearest")
+
+    def dismiss_search() -> None:
+        set_session(lambda s: replace(s, searching=None))
+
     def return_to_diff() -> InputResponse:
         """Focus the diff, closing any dialog and finishing any edit on the way, so nothing is left open unfocused."""
         set_session(
-            lambda s: replace(s, picking_theme=None, picking_base=None, managing=None, naming=None, jumping=None)
+            lambda s: replace(
+                s, picking_theme=None, picking_base=None, managing=None, naming=None, jumping=None, searching=None
+            )
         )
         if session.editing is not None:
             return finish_editing()
@@ -733,6 +824,8 @@ def assess_app(
                 return start_naming()
             case KeyPressed(key="#"):
                 return start_jumping()
+            case KeyPressed(key="/"):
+                return start_searching()
             case KeyPressed(key="f"):
                 set_files_shown(True)
                 return FocusOn(picker_focus)
@@ -798,6 +891,8 @@ def assess_app(
                         cursor_element,
                         actions,
                         on_key,
+                        # Under the search dialog, docked below the middle, which the previewed match's row is centered on.
+                        screen_height // 2 if searching is not None else 0,
                     ),
                 ),
             ),
@@ -854,6 +949,25 @@ def assess_app(
                     ),
                 )
                 if session.jumping is not None
+                else ()
+            ),
+            *(
+                (
+                    text_search(
+                        session.search_query,
+                        set_search_query,
+                        searching.handle,
+                        found,
+                        shown_match,
+                        shown_for(screen_height),
+                        cursor_element,
+                        move_search,
+                        lambda index: go_to_match(found[index]),
+                        cancel_searching,
+                        dismiss_search,
+                    ),
+                )
+                if searching is not None
                 else ()
             ),
             *(
