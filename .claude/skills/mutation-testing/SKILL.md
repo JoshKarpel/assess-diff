@@ -87,6 +87,22 @@ A survivor that matches no entry is a hole until shown otherwise.
   With `--verify`, `--quiet` only turns a missing ref's exit 128 into a silent exit 1.
   Both raise `GitError`, which the loop discards, and an existing ref resolves either way.
 
+### `navigation.py`
+
+- `commented`: the slice's `max(0, first - 1)` becomes `max(1, first - 1)`,
+  so a comment none of whose lines are left never keeps row 0 as the row before them.
+  For a new-side comment, the working tree's numbers run from 1 without a gap,
+  so only line 1 can be the one new-side line before its range, with the range past the file's end;
+  the file is in the diff, so it has a change, and the rows after line 1 are a hunk, which keeps row 0 as context.
+  For an old-side comment, row 0 is a removed line's, which is always kept as a change.
+- `folded`: the context's lower bound `max(0, ...)` becomes `max(1, ...)`.
+  Row 0, then left out of `near`, is a lone row between the file's start and row 1 (in `near`, or the file's end),
+  which the lone-row rule keeps.
+- `folded`: `index > previous + 1` or `len(rows) > previous + 1` becomes `+ 2`.
+  The lone-row rule keeps every gap of one row, so no gap is exactly one row long, and both forms agree on every other.
+- `from_version_1`: the `"version"` key respelled times out rather than surviving:
+  the document stays at version 1, so `migrated` migrates it forever.
+
 ### `ui/diff_view.py`
 
 - `press_rows`, `press`, `finish_on_escape`: the trailing `case _: return None` dropped.

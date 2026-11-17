@@ -14,6 +14,14 @@
   any other commit is pinned by its hash,
   so the diff keeps everything since it as the agent commits.
   On the default branch, the picker lists `HEAD`'s recent history instead.
+- **Each changed file shows its hunks**, with three lines of context either side
+  and a line saying how many unchanged lines are hidden between,
+  where it used to show the whole file.
+  Lines a comment is on stay in view with their context.
+  `z` switches to whole files and back, and the choice is kept as a preference.
+- **Preferences are saved as version 2**, which records that choice.
+  A preferences file 0.1.0 saved loads as before,
+  and once this version saves it, 0.1.0 stops at startup on it.
 - **Reviews are saved as version 2**, which records the chosen base.
   A review 0.1.0 saved opens as before,
   and once this version saves it, 0.1.0 lists it among the files it can't read.

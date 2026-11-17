@@ -38,6 +38,7 @@ from assess_diff.navigation import FileLayout
 from assess_diff.navigation import HeaderAt
 from assess_diff.navigation import Position as CursorPosition
 from assess_diff.navigation import RowAt
+from assess_diff.navigation import Scope
 from assess_diff.navigation import SummaryAt
 from assess_diff.navigation import ViewMode
 from assess_diff.navigation import build_document
@@ -55,6 +56,7 @@ from assess_diff.ui.diff_view import is_near
 from assess_diff.ui.diff_view import near_cursor
 from assess_diff.ui.diff_view import runs
 from assess_diff.ui.diff_view import sideways
+from assess_diff.ui.diff_view import unchanged_text
 from assess_diff.ui.rows import Highlight
 from tests.builders import added
 from tests.builders import comment
@@ -181,7 +183,7 @@ def test_comment_title_is_its_number_then_whether_its_outdated(is_outdated: bool
 
 
 def layout_of(file: FileDiff) -> FileLayout:
-    return FileLayout(file=file, rows=(), placed=(), hunk_starts=frozenset())
+    return FileLayout(file=file, rows=(), placed=(), hunk_starts=frozenset(), hidden=())
 
 
 LINES = (context(1, 1, "a"), removed(2, "b"), added(2, "c"), added(3, "d"), added(4, "e"))
@@ -391,6 +393,7 @@ THREE_FILES = build_document(
     diff_of(modified("a.py", *FIVE_ROWS), modified("b.py", *FIVE_ROWS), modified("c.py", *FIVE_ROWS)),
     (),
     ViewMode.UNIFIED,
+    Scope.WHOLE,
 )
 """The summary at 0, then each file's header and its five rows: `a.py` at 1 to 6, `b.py` at 7 to 12, `c.py` at 13 to 18."""
 
@@ -445,3 +448,8 @@ async def test_a_jump_while_scrolled_sideways_draws_where_it_lands_scrolled_in_o
     )
 
     assert frames_after_marker(cast) == 1, "a frame of the files at the old offset, then one catching up, is two"
+
+
+@pytest.mark.parametrize(("count", "expected"), [(1, " ⋯ 1 unchanged line"), (2, " ⋯ 2 unchanged lines")])
+def test_the_line_for_hidden_rows_counts_them(count: int, expected: str) -> None:
+    assert unchanged_text(count) == expected

@@ -38,7 +38,7 @@ KEYS = st.sampled_from(
     [
         *(Key.Up, Key.Down, Key.ShiftUp, Key.ShiftDown, Key.PageUp, Key.PageDown, Key.Home, Key.End),
         *(Key.Left, Key.Right, Key.Tab, Key.BackTab, Key.Enter, Key.Escape, Key.Backspace, Key.Space),
-        *("j", "k", "J", "K", "n", "N", "r", "d", "e", "s", "b", "t", "f", "o", "c", "x"),
+        *("j", "k", "J", "K", "n", "N", "r", "d", "e", "s", "z", "b", "t", "f", "o", "c", "x"),
     ]
 ).map(lambda key: [KeyPressed(key=key)])
 CLICKS = st.builds(click, st.integers(0, WIDTH - 1), st.integers(0, HEIGHT - 1))

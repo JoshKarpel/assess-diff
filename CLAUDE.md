@@ -29,12 +29,14 @@ uv sync
 just test      # mypy, then pytest with the coverage gate
 just mutate    # mutmut, or `just mutate 'assess_diff.diff.*'` to re-run some mutants
 just bench     # per-key latency on generated diffs, or `just bench --only large/down` for one workload
+just bench-layout  # time to lay out those diffs by view, scope, and comments per file
 just profile large/down  # that workload under the sampling profiler, with a flamegraph in profiles/
 just demo      # record the README's demo as demo/demo.cast, drawing demo/demo.gif with agg if it changed
 just pre-commit
 ```
 
-A performance claim needs `just bench` numbers from before and after the change, from the same machine.
+A performance claim needs `just bench` (or, for laying out the diff, `just bench-layout`) numbers
+from before and after the change, from the same machine.
 The benchmarks in `benchmarks/` sit outside the coverage gate, and reuse the tests' harness.
 
 A pre-commit hook records the demo again whenever `src/assess_diff/`, `demo/`, or `uv.lock` changes,

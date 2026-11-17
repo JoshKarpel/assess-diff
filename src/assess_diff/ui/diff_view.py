@@ -1,8 +1,9 @@
 """
-The diff pane: the review summary, then each file's header, rows and comments, in one scroll.
+The diff pane: the review summary, then each file's header, rows and comments, in one scroll,
+with a line in place of each run of unchanged rows the view's scope hides.
 
 Each file's rows are drawn as a few `Text`s, one per run of rows drawn alike, rather than one per row,
-which keeps the element count near the number of hunks and comments, since whole files are drawn.
+which keeps the element count near the number of hunks and comments, since whole files can be drawn.
 """
 
 from __future__ import annotations
@@ -341,8 +342,11 @@ def file_view(
         children.append(Text(content=f"  {file.placeholder}", style=text_color("slate", 500)))
 
     cursor_row = cursor.index if isinstance(cursor, RowAt) else None
-    breaks = frozenset(index for index, _ in layout.placed)
+    # A run ends before each gap as well as at each comment, so the gap's line goes between two runs.
+    breaks = frozenset(index for index, _ in layout.placed) | frozenset(index - 1 for index, _ in layout.hidden)
     for run in runs(len(layout.rows), breaks, cursor_row, selected):
+        if hidden := layout.hidden_before(run.start):
+            children.append(unchanged_gap(hidden).with_key(f"gap-{run.start}"))
         lines: list[Chunk] = []
         for index in range(run.start, run.stop):
             if index > run.start:
@@ -357,7 +361,23 @@ def file_view(
             ).with_key(f"rows-{run.start}")
         )
         children.extend(boxes(run.stop - 1))
+    if hidden := layout.hidden_before(len(layout.rows)):
+        children.append(unchanged_gap(hidden).with_key(f"gap-{len(layout.rows)}"))
     return Div(style=col | margin_bottom(1), children=tuple(children))
+
+
+def unchanged_text(count: int) -> str:
+    """What the line in place of `count` hidden unchanged rows says."""
+    return f" ⋯ {count} unchanged {'line' if count == 1 else 'lines'}"
+
+
+@component
+def unchanged_gap(count: int) -> Text:
+    """
+    The line drawn in place of `count` unchanged rows the view hides, which `z` shows.
+    A component rather than a bare `Text` so it can be keyed, by the row it's before, as the runs around it are.
+    """
+    return Text(content=unchanged_text(count), style=text_wrap_none | text_color("slate", 400) | text_bg("slate", 900))
 
 
 def is_near(extent: Region, view: Region) -> bool:

@@ -56,12 +56,13 @@ from assess_diff.navigation import Document
 from assess_diff.navigation import HeaderAt
 from assess_diff.navigation import Position
 from assess_diff.navigation import RowAt
+from assess_diff.navigation import Scope
 from assess_diff.navigation import SummaryAt
 from assess_diff.navigation import ViewMode
+from assess_diff.navigation import after_deleting
 from assess_diff.navigation import build_document
-from assess_diff.navigation import comment_row
 from assess_diff.navigation import extended
-from assess_diff.navigation import in_mode
+from assess_diff.navigation import in_view
 from assess_diff.navigation import moved
 from assess_diff.navigation import next_comment
 from assess_diff.navigation import next_stop
@@ -69,7 +70,7 @@ from assess_diff.navigation import placements
 from assess_diff.navigation import primary
 from assess_diff.navigation import recovered
 from assess_diff.navigation import recovered_selection
-from assess_diff.navigation import row_lines
+from assess_diff.navigation import selected_lines
 from assess_diff.navigation import selection_span
 from assess_diff.preferences import Preferences
 from assess_diff.preferences import PreferencesFile
@@ -178,6 +179,10 @@ def other_mode(mode: ViewMode) -> ViewMode:
     return ViewMode.SPLIT if mode is ViewMode.UNIFIED else ViewMode.UNIFIED
 
 
+def other_scope(scope: Scope) -> Scope:
+    return Scope.WHOLE if scope is Scope.CONTEXT else Scope.CONTEXT
+
+
 def copied(review: Review, document: Document | None) -> tuple[str, CopyToClipboard | None]:
     """The notice for `c`, and the control that copies the review as Markdown, once there's a diff to cite."""
     if document is None:
@@ -273,10 +278,11 @@ def status_line(review: Review, diff: Diff | None, mode: ViewMode) -> tuple[tupl
     )
 
 
-def key_hints(session: Session, are_keys_shown: bool) -> tuple[str, ...]:
+def key_hints(session: Session, scope: Scope, are_keys_shown: bool) -> tuple[str, ...]:
     """
     The keys of what has focus, each with what it does; the diff's are folded away unless `are_keys_shown`,
     but a dialog's or a confirmation's always show.
+    `z`'s says what it would do from `scope`: unfold the unchanged lines it hides, or fold them away.
     """
     if session.naming is not None:
         return ("enter rename", "esc keep the old name")
@@ -305,6 +311,7 @@ def key_hints(session: Session, are_keys_shown: bool) -> tuple[str, ...]:
         "r summary",
         "e rename",
         "s split",
+        "z unfold unchanged" if scope is Scope.CONTEXT else "z fold unchanged",
         "b base",
         "t theme",
         "f files",
@@ -375,11 +382,12 @@ def assess_app(
     use_effect(follow_diff, deps=(review.base,))
 
     mode = preferences.view_mode
+    scope = preferences.scope
     picking = session.picking_theme
     theme = (picking.query.highlighted(themes()) if picking is not None else None) or preferences.theme
     document = use_memo(
-        lambda: None if diff is None else build_document(diff, review.comments, mode),
-        (diff, placements(review.comments), mode),
+        lambda: None if diff is None else build_document(diff, review.comments, mode, scope),
+        (diff, placements(review.comments), mode, scope),
     )
     outdated = use_memo(
         lambda: frozenset(
@@ -422,7 +430,7 @@ def assess_app(
             number = editing[0]
             comment = open_review.review.comment(number)
             if comment is not None and not comment.body.strip():
-                set_session(lambda s: replace(s, cursor=comment_row(document, number)))
+                set_session(lambda s: replace(s, cursor=after_deleting(document, number, review.comments)))
                 update_review(lambda r: delete_comment(r, number))
         return FocusOn(diff_focus), ScrollIntoView(cursor_element, block="nearest")
 
@@ -460,7 +468,7 @@ def assess_app(
         layout = document.layout_of(row)
         started = selection or row
         side = primary(layout.rows[started.index]).side
-        lines = tuple(line for row in layout.rows[first_row : last_row + 1] for line in row_lines(row))
+        lines = selected_lines(layout, first_row, last_row)
         anchor, excerpt = anchor_for(layout.file, lines, side, document.diff.base.commit)
         number = open_review.review.next_number
         update_review(lambda r: add_comment(r, anchor, excerpt, open_review.now()))
@@ -531,7 +539,11 @@ def assess_app(
             case KeyPressed(key="d") if isinstance(cursor, CommentAt):
                 number = cursor.number
                 if confirming == number:
-                    set_session(lambda s: replace(s, cursor=comment_row(document, number), confirming_delete=None))
+                    set_session(
+                        lambda s: replace(
+                            s, cursor=after_deleting(document, number, review.comments), confirming_delete=None
+                        )
+                    )
                     update_review(lambda r: delete_comment(r, number))
                 else:
                     set_session(lambda s: replace(s, confirming_delete=number))
@@ -698,9 +710,15 @@ def assess_app(
                 return FocusOn(handle)
             case KeyPressed(key="s"):
                 new_mode = other_mode(mode)
-                moved_cursor = in_mode(document, cursor, review.comments, new_mode)
+                moved_cursor = in_view(document, cursor, review.comments, new_mode, scope)
                 set_session(lambda s: replace(s, cursor=moved_cursor, selection=None))
                 save_preferences(preferences.model_copy(update={"view_mode": new_mode}))
+                return ScrollIntoView(cursor_element, block="center")
+            case KeyPressed(key="z"):
+                new_scope = other_scope(scope)
+                moved_cursor = in_view(document, cursor, review.comments, mode, new_scope)
+                set_session(lambda s: replace(s, cursor=moved_cursor, selection=None))
+                save_preferences(preferences.model_copy(update={"scope": new_scope}))
                 return ScrollIntoView(cursor_element, block="center")
             case KeyPressed(key="b"):
                 handle = session.picking_base or FocusHandle()
@@ -738,7 +756,7 @@ def assess_app(
     comment_counts = tuple(
         sum(comment.anchor.path == file.path for comment in review.comments) for file in picker_files
     )
-    hints = key_hints(session, are_keys_shown)
+    hints = key_hints(session, scope, are_keys_shown)
 
     return Div(
         style=col,
