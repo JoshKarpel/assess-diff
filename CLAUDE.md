@@ -51,6 +51,9 @@ with why no test can catch it.
 - Python 3.15, line length 120, strict mypy, ruff (config in `pyproject.toml`).
 - Frozen, slotted dataclasses for internal values; pydantic models only for what crosses the disk boundary.
 - Every saved review is user data: never write a code path that can drop or overwrite comments silently.
+- A change someone using assess-diff would notice (a key, a screen, a fix, a file format)
+  gets an entry in `CHANGELOG.md` under `Unreleased`, grouped per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+  A fix to code that hasn't been released yet folds into its feature's own entry, not `Fixed`.
 - Changing a model that's written to disk (`Review`, `Preferences`) bumps its `version`
   and adds the migration from the last (`MIGRATIONS` in `review.py`), with a fixture of the old file,
   so files written before the change still load.
